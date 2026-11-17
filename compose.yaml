@@ -1,0 +1,46 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: researchpilot
+      MYSQL_USER: rp
+      MYSQL_PASSWORD: rp-local
+      MYSQL_ROOT_PASSWORD: rp-local-root
+    command: ["--default-time-zone=+00:00"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./migrations/001_m1.sql:/docker-entrypoint-initdb.d/001_m1.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysql --protocol=tcp -h127.0.0.1 -urp -p$$MYSQL_PASSWORD researchpilot -e 'SELECT 1 FROM research_tasks LIMIT 0'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+  api:
+    build: .
+    command: ["api"]
+    environment: &app-env
+      MYSQL_DSN: rp:rp-local@tcp(mysql:3306)/researchpilot
+      REDIS_ADDR: redis:6379
+      PUBLIC_ORIGIN: http://localhost:8080
+    depends_on:
+      mysql: { condition: service_healthy }
+    ports: ["127.0.0.1:8080:8080"]
+  worker:
+    build: .
+    command: ["worker"]
+    environment: *app-env
+    depends_on:
+      mysql: { condition: service_healthy }
+      redis: { condition: service_healthy }
+volumes:
+  mysql-data:
+  redis-data:

@@ -1,0 +1,27 @@
+*{box-sizing:border-box}
+:root{font:16px/1.55 Inter,"Microsoft YaHei",sans-serif;color:#1d3045;background:#f5f7fb}
+body{margin:0}button,input,textarea{font:inherit}
+button{border:0;border-radius:.55rem;padding:.6rem 1rem;background:#1d4fc2;color:white;cursor:pointer}
+button:disabled{opacity:.55;cursor:default}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #6894ff;outline-offset:2px}
+input,textarea{display:block;width:100%;padding:.75rem;border:1px solid #c5d2e3;border-radius:.55rem;background:#fff;color:inherit;margin:.35rem 0 1rem}
+textarea{resize:vertical}
+h1{font-size:clamp(1.5rem,3vw,2rem);overflow-wrap:anywhere;margin:0 0 1.4rem}h2{font-size:1rem}
+.brand{font-weight:800;color:#173f95;margin:0 0 1.4rem;font-size:1.2rem}
+.plain{background:#e8efff;color:#1d4aa6}.muted{color:#546780}.error{color:#a42a36}
+.login{min-height:100vh;display:grid;place-items:center;padding:1.5rem}
+.login form{width:min(100%,420px);padding:2rem;background:white;border:1px solid #dce5ef;border-radius:1rem}
+.login button{margin-right:.55rem}
+.layout{display:grid;grid-template-columns:245px 1fr;min-height:100vh}
+aside{display:flex;flex-direction:column;gap:.5rem;padding:1.5rem;background:#edf2fa;border-right:1px solid #dce5ef}
+.history{display:grid;text-align:left;color:inherit;background:transparent;overflow-wrap:anywhere}
+.history[aria-current],.history:hover{background:#dde9ff}.history small{color:#546780}
+.logout{margin-top:auto}
+.layout main{width:min(100%,1150px);min-width:0;padding:clamp(1.25rem,4vw,3.5rem)}
+.layout form{max-width:760px}
+header{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}
+.status{background:#e1edff;color:#21478e;border-radius:.45rem;padding:.35rem .65rem;white-space:nowrap}
+.result{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:1rem}
+section{background:white;border:1px solid #dce5ef;border-radius:.8rem;padding:1rem}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+@media(max-width:720px){.layout,.result{grid-template-columns:1fr}.layout{min-height:initial}aside{border-right:0}.logout{margin-top:.5rem}}
