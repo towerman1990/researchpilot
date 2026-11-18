@@ -9,3 +9,4 @@
 | 已采用，2026-11-18 | 以 Git 版本化交接摘要，技术设计继续由现有文档维护。同步前只在工作区干净时拉取，提交与推送由用户授权。 | [协作指南](../AGENTS.md) |
 | TODO | 对照验证 Gin 和 Hertz 后再定 HTTP 框架。确认桌面壳及 MyGo 指代，并按双端发布验收选型。 | [技术选型](../docs/06-TECH-STACK-DECISIONS.md) |
 | TODO | 根据实际验收确认预算、并发、事件留存阈值和搜索供应商配置。 | [M2 设计](../docs/08-M2-DESIGN.md) |
+| 已采用，2026-11-18 | 使用 GitHub 托管的 Linux Actions runner 执行 Go/MySQL、前端和 Compose 烟测。使用临时测试凭据与主密钥，不使用真实模型密钥；部署另行建设。 | [CI 工作流](../.github/workflows/ci.yml) |

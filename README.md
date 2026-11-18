@@ -62,3 +62,13 @@ npm --prefix web run build
 - [技术文档索引](docs/README.md)
 - [M2 设计](docs/08-M2-DESIGN.md)与 [M2 实施和验证记录](docs/09-M2-IMPLEMENTATION.md)
 - [Codex 跨设备协作指南](AGENTS.md)与 [当前项目进度](context/current-progress.md)
+
+## 持续集成
+
+[CI 工作流](.github/workflows/ci.yml) 在推送 main、提交 PR 和手动触发时运行：
+
+- Go 格式检查、模块校验、vet、竞态检测，以及 MySQL 8.4 迁移和持久执行集成测试。
+- Node.js 22 下安装锁定依赖、前端事件测试和生产构建。
+- 构建 Docker 镜像并启动完整 Compose 栈，运行 M1 烟测，验证任务流转、租户隔离、幂等和 SSE；失败时输出容器诊断。
+
+CI 使用临时数据库和随机生成的模型加密主密钥，不需要仓库 Secrets，也不访问真实模型供应商。真实模型质量评估仍需独立人工验收。CI 不发布镜像、不部署服务器。工作流推送至 GitHub 后才会开始云端运行；如需禁止合并失败的 PR，请在 GitHub 分支规则中将三个 CI 检查设为必需检查。
