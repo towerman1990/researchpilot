@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -45,12 +46,12 @@ func migrate(ctx context.Context, db *sql.DB, dir string) error {
 			return err
 		}
 		version := filepath.Base(file)
-		checksum := fmt.Sprintf("%x", sha256.Sum256(raw))
+		checksum, compatibleChecksums := migrationChecksums(raw)
 		var stored string
 		var dirty bool
 		err = conn.QueryRowContext(ctx, "SELECT checksum,dirty FROM schema_migrations WHERE version=?", version).Scan(&stored, &dirty)
 		if err == nil {
-			if dirty || stored != checksum {
+			if dirty || !compatibleChecksums[stored] {
 				return fmt.Errorf("migration %s dirty or changed; inspect schema before retrying", version)
 			}
 			continue
@@ -118,4 +119,13 @@ func validateM1(ctx context.Context, conn *sql.Conn) error {
 		rows.Close()
 	}
 	return nil
+}
+
+// Git may check out the same SQL with LF or CRLF. Canonicalize new ledger
+// entries while accepting legacy raw checksums for either checkout convention.
+func migrationChecksums(raw []byte) (string, map[string]bool) {
+	lf := bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+	crlf := bytes.ReplaceAll(lf, []byte("\n"), []byte("\r\n"))
+	canonical := fmt.Sprintf("%x", sha256.Sum256(lf))
+	return canonical, map[string]bool{canonical: true, fmt.Sprintf("%x", sha256.Sum256(raw)): true, fmt.Sprintf("%x", sha256.Sum256(crlf)): true}
 }

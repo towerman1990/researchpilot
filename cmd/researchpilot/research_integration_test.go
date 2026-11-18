@@ -16,7 +16,10 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestResearchIntegration(t *testing.T) {
+func TestResearchIntegration(t *testing.T)             { researchFixture(t, true, false) }
+func TestInsufficientEvidenceIntegration(t *testing.T) { researchFixture(t, false, false) }
+func TestCoverageJSONRepairIntegration(t *testing.T)   { researchFixture(t, true, true) }
+func researchFixture(t *testing.T, sufficient bool, malformed bool) {
 	db := integrationDB(t)
 	keyPath := os.Getenv("MODEL_MASTER_KEY_FILE")
 	if keyPath == "" {
@@ -57,6 +60,16 @@ func TestResearchIntegration(t *testing.T) {
 				encoded, _ := json.Marshal(map[string]any{"findings": []map[string]any{{"text": "The evidence supports durable execution.", "sources": []string{ids[1]}}}, "limitations": []string{"Fixture evidence."}})
 				content = string(encoded)
 			}
+			if strings.Contains(string(raw), "Assess evidence coverage") {
+				coverage, _ := json.Marshal(map[string]any{"sufficient": sufficient, "gaps": []string{"Missing direct support"}})
+				content = string(coverage)
+				if malformed {
+					content = `{"sufficient":true,"gaps":["A "quoted" note"]}`
+				}
+			}
+			if strings.Contains(string(raw), "Repair coverage JSON") {
+				content = `{"sufficient":true,"gaps":["A quoted note"]}`
+			}
 			encoded, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": content}, "finish_reason": "stop"}}, "usage": map[string]int{"total_tokens": 100}})
 			body = string(encoded)
 		}
@@ -75,7 +88,16 @@ func TestResearchIntegration(t *testing.T) {
 	if err = db.QueryRow("SELECT status FROM research_tasks WHERE id=?", d.Task).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != "SUCCEEDED" {
+	expectedStatus := "SUCCEEDED"
+	expectedUsage := 300
+	if malformed {
+		expectedUsage += 100
+	}
+	if !sufficient {
+		expectedStatus = "PARTIAL"
+		expectedUsage = 600
+	}
+	if status != expectedStatus {
 		t.Fatal(status)
 	}
 	var count int
@@ -83,7 +105,7 @@ func TestResearchIntegration(t *testing.T) {
 		t.Fatalf("citations=%d err=%v", count, err)
 	}
 	var used, reserved int
-	if err = db.QueryRow("SELECT tokens_used,tokens_reserved FROM research_tasks WHERE id=?", d.Task).Scan(&used, &reserved); err != nil || used != 200 || reserved != 0 {
+	if err = db.QueryRow("SELECT tokens_used,tokens_reserved FROM research_tasks WHERE id=?", d.Task).Scan(&used, &reserved); err != nil || used != expectedUsage || reserved != 0 {
 		t.Fatalf("accounting=%d %d %v", used, reserved, err)
 	}
 }

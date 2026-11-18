@@ -12,7 +12,10 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	evidencecontract "researchpilot/internal/evidence"
+	toolcontract "researchpilot/internal/tools"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -22,15 +25,12 @@ type evidence struct {
 	URL     string `json:"url"`
 	Excerpt string `json:"excerpt"`
 }
-type toolInput struct {
-	Tool  string `json:"tool"`
-	Query string `json:"query,omitempty"`
-	URL   string `json:"url,omitempty"`
-	Owner string `json:"owner,omitempty"`
-	Repo  string `json:"repo,omitempty"`
-}
+type toolInput = toolcontract.Input
 
 var stripScripts = regexp.MustCompile("(?is)<(script|style)[^>]*>.*?</(script|style)>")
+var articleContent = regexp.MustCompile("(?is)<article\\b[^>]*>(.*?)</article>")
+var mainContent = regexp.MustCompile("(?is)<main\\b[^>]*>(.*?)</main>")
+var navigationContent = regexp.MustCompile("(?is)<(?:nav|header|footer|aside|svg|noscript)\\b[^>]*>.*?</(?:nav|header|footer|aside|svg|noscript)>")
 var stripTags = regexp.MustCompile("(?s)<[^>]+>")
 var spaceRuns = regexp.MustCompile("\\s+")
 var repoPart = regexp.MustCompile("^[A-Za-z0-9_.-]{1,100}$")
@@ -43,6 +43,9 @@ func clip(value string, count int) string {
 }
 
 func requestText(ctx context.Context, client *http.Client, raw string, headers map[string]string) ([]byte, error) {
+	return requestTextLimit(ctx, client, raw, headers, 2<<20)
+}
+func requestTextLimit(ctx context.Context, client *http.Client, raw string, headers map[string]string, limit int64) ([]byte, error) {
 	if _, err := validateURL(raw); err != nil {
 		return nil, err
 	}
@@ -54,22 +57,67 @@ func requestText(ctx context.Context, client *http.Client, raw string, headers m
 	for k, v := range headers {
 		request.Header.Set(k, v)
 	}
-	response, err := client.Do(request)
+	requestClient := client
+	if headers["Authorization"] != "" || headers["X-Subscription-Token"] != "" {
+		isolated := *client
+		isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("credential_redirect_forbidden") }
+		requestClient = &isolated
+	}
+	response, err := requestClient.Do(request)
 	if err != nil {
 		return nil, errors.New("fetch_failed")
 	}
-	return readLimited(response, 2<<20)
+	return readLimited(response, limit)
 }
 
+func newToolRegistry(client *http.Client) *toolcontract.Registry[[]evidence] {
+	registry := toolcontract.NewRegistry[[]evidence]()
+	for name, schema := range toolcontract.Schemas {
+		timeout := 30 * time.Second
+		if name == "fetch_page" {
+			timeout = 15 * time.Second
+		}
+		if name == "web_search" {
+			timeout = 45 * time.Second
+		}
+		if err := registry.Register(toolcontract.Spec{Name: name, Version: "1", Timeout: timeout, MaxOutputBytes: 2 << 20, InputSchema: schema}, func(ctx context.Context, input toolInput) ([]evidence, error) {
+			return collectEvidenceRaw(ctx, client, input)
+		}); err != nil {
+			panic(err)
+		}
+	}
+	return registry
+}
 func collectEvidence(ctx context.Context, client *http.Client, input toolInput) ([]evidence, error) {
+	return newToolRegistry(client).Execute(ctx, input)
+}
+func collectEvidenceRaw(ctx context.Context, client *http.Client, input toolInput) ([]evidence, error) {
 	switch input.Tool {
 	case "fetch_page":
-		raw, err := requestText(ctx, client, input.URL, nil)
+		location := input.URL
+		if u, err := url.Parse(input.URL); err == nil && strings.EqualFold(u.Hostname(), "github.com") {
+			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+			if len(parts) == 4 && parts[2] == "wiki" && repoPart.MatchString(parts[0]) && repoPart.MatchString(parts[1]) && regexp.MustCompile("^[A-Za-z0-9_.()-]{1,128}$").MatchString(parts[3]) {
+				location = "https://raw.githubusercontent.com/wiki/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[3]) + ".md"
+			}
+		}
+		raw, err := requestText(ctx, client, location, nil)
+		if err != nil && location != input.URL {
+			raw, err = requestText(ctx, client, input.URL, nil)
+		}
 		if err != nil {
 			return nil, err
 		}
-		text := spaceRuns.ReplaceAllString(html.UnescapeString(stripTags.ReplaceAllString(stripScripts.ReplaceAllString(string(raw), " "), " ")), " ")
-		return []evidence{{Title: input.URL, URL: input.URL, Excerpt: clip(strings.TrimSpace(text), 12000)}}, nil
+		text := pageTextAt(string(raw), input.URL)
+		goal, _ := ctx.Value(evidenceGoalKey{}).(string)
+		if u, parseErr := url.Parse(input.URL); parseErr == nil {
+			goal += " " + strings.ReplaceAll(u.Fragment, ".", " ")
+		}
+		text = evidencecontract.Select(text, goal, 18000)
+		if strings.TrimSpace(text) == "" {
+			return nil, errors.New("empty_page")
+		}
+		return []evidence{{Title: input.URL, URL: input.URL, Excerpt: strings.TrimSpace(text)}}, nil
 	case "web_search":
 		key := os.Getenv("BRAVE_SEARCH_API_KEY")
 		if key == "" {
@@ -120,6 +168,9 @@ func collectEvidence(ctx context.Context, client *http.Client, input toolInput) 
 		}
 		raw, err := requestText(ctx, client, base, headers)
 		if err != nil {
+			if err.Error() == "upstream_http_403" || err.Error() == "upstream_http_429" {
+				return githubPublicFallback(ctx, client, input)
+			}
 			return nil, err
 		}
 		var metadata struct {
@@ -136,11 +187,11 @@ func collectEvidence(ctx context.Context, client *http.Client, input toolInput) 
 		var commit struct {
 			SHA string `json:"sha"`
 		}
-		if json.Unmarshal(commitRaw, &commit) != nil || len(commit.SHA) != 40 {
+		if json.Unmarshal(commitRaw, &commit) != nil || !commitID.MatchString(commit.SHA) {
 			return nil, errors.New("invalid_commit")
 		}
 		headers["Accept"] = "application/vnd.github.raw+json"
-		readme, err := requestText(ctx, client, base+"/readme?ref="+commit.SHA, headers)
+		readme, err := requestTextLimit(ctx, client, base+"/readme?ref="+commit.SHA, headers, 256<<10)
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +222,7 @@ func collectEvidence(ctx context.Context, client *http.Client, input toolInput) 
 				continue
 			}
 			headers["Accept"] = "application/vnd.github.raw+json"
-			file, err := requestText(ctx, client, base+"/contents/"+url.PathEscape(entry.Name)+"?ref="+commit.SHA, headers)
+			file, err := requestTextLimit(ctx, client, base+"/contents/"+url.PathEscape(entry.Name)+"?ref="+commit.SHA, headers, 256<<10)
 			if err != nil {
 				continue
 			}
@@ -185,29 +236,30 @@ func collectEvidence(ctx context.Context, client *http.Client, input toolInput) 
 }
 
 func (e execution) saveSources(ctx context.Context, sources []evidence) ([]evidence, error) {
-	err := e.mutate(ctx, func(tx *sql.Tx, _ taskRow) error {
-		for i := range sources {
-			source := &sources[i]
-			source.ID = identifier(16)
-			source.Title = clip(source.Title, 512)
-			fingerprint := sha256.Sum256([]byte(source.URL + "\n" + source.Excerpt))
-			var existing string
-			err := tx.QueryRowContext(ctx, "SELECT source_id FROM research_sources WHERE tenant_id=? AND task_id=? AND fingerprint=?", e.Tenant, e.Task, fingerprint[:]).Scan(&existing)
-			if err == nil {
-				source.ID = existing
-				continue
-			}
-			if !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-			_, err = tx.ExecContext(ctx, "INSERT INTO research_sources(tenant_id,task_id,source_id,title,canonical_url,excerpt,fingerprint) VALUES(?,?,?,?,?,?,?)", e.Tenant, e.Task, source.ID, source.Title, source.URL, source.Excerpt, fingerprint[:])
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	err := e.mutate(ctx, func(tx *sql.Tx, _ taskRow) error { return storeSources(ctx, tx, e.delivery, sources) })
 	return sources, err
+}
+func storeSources(ctx context.Context, tx *sql.Tx, d delivery, sources []evidence) error {
+	for i := range sources {
+		source := &sources[i]
+		source.ID = identifier(16)
+		source.Title = clip(source.Title, 512)
+		fingerprint := sha256.Sum256([]byte(source.URL + "\n" + source.Excerpt))
+		var existing string
+		err := tx.QueryRowContext(ctx, "SELECT source_id FROM research_sources WHERE tenant_id=? AND task_id=? AND fingerprint=?", d.Tenant, d.Task, fingerprint[:]).Scan(&existing)
+		if err == nil {
+			source.ID = existing
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO research_sources(tenant_id,task_id,source_id,title,canonical_url,excerpt,fingerprint) VALUES(?,?,?,?,?,?,?)", d.Tenant, d.Task, source.ID, source.Title, source.URL, source.Excerpt, fingerprint[:])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *apiServer) sources(w http.ResponseWriter, r *http.Request, tenant string) {
@@ -239,7 +291,7 @@ func renderReport(draft reportDraft, sources []evidence) (string, []evidence, er
 	for _, s := range sources {
 		byID[s.ID] = s
 	}
-	if len(draft.Findings) == 0 {
+	if len(draft.Findings) == 0 || len(draft.Findings) > 8 || len(draft.Limitations) > 16 {
 		return "", nil, errors.New("report_has_no_findings")
 	}
 	used := make([]evidence, 0)
@@ -254,7 +306,7 @@ func renderReport(draft reportDraft, sources []evidence) (string, []evidence, er
 		return s
 	}
 	for _, finding := range draft.Findings {
-		if len(finding.Sources) == 0 {
+		if len(finding.Sources) == 0 || len(finding.Sources) > 12 || strings.TrimSpace(finding.Text) == "" || len(finding.Text) > 6000 {
 			return "", nil, errors.New("finding_missing_citation")
 		}
 		body.WriteString(escape(finding.Text))
@@ -279,7 +331,39 @@ func renderReport(draft reportDraft, sources []evidence) (string, []evidence, er
 	}
 	body.WriteString("\n## 参考资料\n\n")
 	for i, source := range used {
-		body.WriteString(fmt.Sprintf("%d. [%s](%s)\n", i+1, escape(source.Title), source.URL))
+		if _, err := validateURL(source.URL); err != nil {
+			return "", nil, errors.New("invalid_source_url")
+		}
+		safeURL := strings.NewReplacer("<", "%3C", ">", "%3E", "\n", "%0A", "\r", "%0D").Replace(source.URL)
+		body.WriteString(fmt.Sprintf("%d. [%s](<%s>)\n", i+1, escape(source.Title), safeURL))
 	}
 	return body.String(), used, nil
+}
+
+func pageText(raw string) string {
+	raw = stripScripts.ReplaceAllString(raw, " ")
+	if article := articleContent.FindStringSubmatch(raw); len(article) > 1 {
+		raw = article[1]
+	} else if main := mainContent.FindStringSubmatch(raw); len(main) > 1 {
+		raw = main[1]
+	}
+	raw = navigationContent.ReplaceAllString(raw, " ")
+	return strings.TrimSpace(spaceRuns.ReplaceAllString(html.UnescapeString(stripTags.ReplaceAllString(raw, " ")), " "))
+}
+
+type evidenceGoalKey struct{}
+
+func pageTextAt(raw, location string) string {
+	u, err := url.Parse(location)
+	if err == nil && u.Fragment != "" {
+		anchor := regexp.MustCompile("(?is)\\bid\\s*=\\s*(?:[\"']" + regexp.QuoteMeta(u.Fragment) + "[\"']|" + regexp.QuoteMeta(u.Fragment) + "(?:[\\s>]))")
+		if loc := anchor.FindStringIndex(raw); loc != nil {
+			start := strings.LastIndex(raw[:loc[0]], "<")
+			if start < 0 {
+				start = loc[0]
+			}
+			raw = raw[start:]
+		}
+	}
+	return pageText(raw)
 }

@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
-	if len(os.Args) != 2 || (os.Args[1] != "api" && os.Args[1] != "worker" && os.Args[1] != "migrate") {
-		log.Fatal("usage: researchpilot api|worker|migrate")
+	if len(os.Args) != 2 || (os.Args[1] != "api" && os.Args[1] != "worker" && os.Args[1] != "migrate" && os.Args[1] != "rotate-model-keys" && os.Args[1] != "evaluate") {
+		log.Fatal("usage: researchpilot api|worker|migrate|rotate-model-keys|evaluate")
 	}
 	if err := run(os.Args[1]); err != nil {
 		log.Fatal(err)
@@ -54,14 +55,22 @@ func run(mode string) error {
 		return migrate(ctx, db, env("MIGRATIONS_DIR", "migrations"))
 	}
 	var schemaReady bool
-	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='003_research.sql' AND dirty=false)").Scan(&schemaReady); err != nil || !schemaReady {
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='006_model_failure_reason.sql' AND dirty=false)").Scan(&schemaReady); err != nil || !schemaReady {
 		return errors.New("M2 schema missing; run researchpilot migrate before starting API or worker")
+	}
+	if mode == "evaluate" {
+		return evaluate(ctx, db)
+	}
+	if mode == "rotate-model-keys" {
+		return rotateModelKeys(ctx, db)
 	}
 	if mode == "worker" {
 		return runWorker(ctx, db, env("REDIS_ADDR", "127.0.0.1:6379"))
 	}
 
-	api := &apiServer{db: db, origin: env("PUBLIC_ORIGIN", "http://localhost:8080")}
+	limits := redis.NewClient(&redis.Options{Addr: env("REDIS_ADDR", "127.0.0.1:6379"), Password: os.Getenv("REDIS_PASSWORD")})
+	defer limits.Close()
+	api := &apiServer{db: db, origin: env("PUBLIC_ORIGIN", "http://localhost:8080"), limiter: redisLimiter{limits}}
 	server := &http.Server{
 		Addr: env("HTTP_ADDR", ":8080"), Handler: api.routes(),
 		ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second,

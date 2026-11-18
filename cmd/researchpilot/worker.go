@@ -76,11 +76,17 @@ func runWorker(ctx context.Context, db *sql.DB, address string) error {
 	defer tick.Stop()
 	scan := time.NewTicker(5 * time.Second)
 	defer scan.Stop()
+	retention := time.NewTicker(time.Hour)
+	defer retention.Stop()
 	log.Printf("worker listening on %s", queue)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-retention.C:
+			if err := pruneEvents(ctx, db); err != nil {
+				log.Printf("event retention: %T", err)
+			}
 		case <-tick.C:
 			if err := relay(ctx, db, client, queue); err != nil && ctx.Err() == nil {
 				log.Printf("outbox relay: %v", err)

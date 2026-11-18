@@ -10,6 +10,17 @@ const errors = {
   registration_conflict:'这个邮箱已注册，请直接登录。',
   invalid_task_request:'请输入 1 到 2000 字的研究目标。',
   idempotency_conflict:'这次提交的内容已变化，请重新提交。',
+  insufficient_evidence:'已取得的资料不足以支撑完整回答，已保留部分成果。',
+  model_output_truncated:'模型输出达到上限，未生成完整报告；请缩小研究范围或检查模型配置。',
+  model_dns_policy_denied:'模型域名解析到保留或私网地址（可能是代理 Fake-IP），请检查 DNS 设置。',
+  model_dns_resolution_failed:'模型域名解析失败，请检查服务端 DNS。',
+  model_connection_failed:'模型服务连接失败，请检查网络与代理。',
+  model_tls_failed:'模型服务 TLS 证书验证失败。',
+  model_http_401:'模型服务拒绝认证，请检查 API Key。',
+  model_http_403:'模型服务拒绝访问，请检查账号权限。',
+  model_http_429:'模型服务限流，请稍后重试。',
+  rate_limited:'请求过于频繁，请稍后重试。',
+  model_configuration_revoked:'模型密钥已撤销，请重新配置。',
   authentication_required:'会话已过期，请重新登录。',
 };
 
@@ -83,45 +94,61 @@ function App() {
     if (!selected || !user) return;
     let live = true;
     const endpoint = path + '/' + selected;
-    const stream = new EventSource(endpoint + '/events?after=0');
+    let stream;
+    let generation=0;
     async function refresh() {
       try {
-        const current = await api(endpoint);
-        if (!live) return;
-        setTask(old => old && BigInt(old.event_seq)>BigInt(current.event_seq)?old:current);
-        setHistory(old => [current, ...old.filter(item => item.task_id !== current.task_id)]);
-        if (current.status === 'SUCCEEDED' || current.status === 'PARTIAL') {
-          const result = await api(endpoint + '/report');
-          if (live) setReport(result.markdown);
+        const current=await api(endpoint);
+        if(!live)return null;
+        setTask(old=>old&&BigInt(old.event_seq)>BigInt(current.event_seq)?old:current);
+        setHistory(old=>[current,...old.filter(item=>item.task_id!==current.task_id)]);
+        if(current.status==='SUCCEEDED'||current.status==='PARTIAL'){
+          const result=await api(endpoint+'/report');
+          if(live)setReport(result.markdown);
         }
-      } catch (e) {
-        if (live) setError(e.message);
+        return current;
+      }catch(e){if(live)setError(e.message);return null;}
+    }
+    async function connect(){
+      const ticket=++generation;
+      stream?.close();
+      const current=await refresh();
+      if(!live||ticket!==generation||!current)return;
+      if(terminal(current.status)){setConnection('');return;}
+      stream=new EventSource(endpoint+'/events?after='+encodeURIComponent(current.event_seq));
+      stream.onopen=()=>{if(live)setConnection('实时连接已建立');};
+      stream.onerror=()=>{
+        if(!live)return;
+        setConnection('连接中断，正在重连');
+        void refresh().then(current=>{
+          if(live&&current&&terminal(current.status)){stream?.close();setConnection('');}
+        });
+      };
+      stream.addEventListener('reset',()=>{
+        if(!live)return;
+        stream.close();
+        setEvents([]);
+        setTask(null);
+        setConnection('正在恢复任务快照');
+        void connect();
+      });
+      for(const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','plan_updated','replan_started','report_ready']){
+        stream.addEventListener(type,event=>{
+          if(!live)return;
+          const value=JSON.parse(event.data);
+          const item={...value,type};
+          setEvents(old=>mergeEvent(old,item));
+          setTask(old=>applyTaskEvent(old,item));
+          if((type==='task_status'||type==='report_ready')&&terminal(value.payload.status)){
+            stream.close();setConnection('');
+            void refresh();
+          }
+        });
       }
     }
+    void connect();
+    return ()=>{live=false;generation++;stream?.close();};
 
-    stream.onopen = () => setConnection('实时连接已建立');
-    stream.onerror = () => {
-      if (!live) return;
-      setConnection('连接中断，正在重连');
-      void refresh();
-    };
-    for (const type of ['task_status','step_started','tool_finished','usage_updated','report_ready']) {
-      stream.addEventListener(type, event => {
-        if (!live) return;
-        const value = JSON.parse(event.data);
-        const item = {...value,type};
-        setEvents(old => mergeEvent(old,item));
-        setTask(old => applyTaskEvent(old,item));
-        if ((type === 'task_status' || type === 'report_ready') && terminal(value.payload.status)) {
-          stream.close();
-          setConnection('');
-        }
-        if (type === 'report_ready') void refresh();
-      });
-    }
-
-    void refresh();
-    return () => { live = false; stream.close(); };
   }, [selected,user]);
 
   function select(id) {
@@ -166,6 +193,19 @@ function App() {
     } catch(e) { setError(e.message); }
   }
 
+  async function probeModel(){
+    setBusy(true);setError('');
+    try{const result=await api('/api/v1/model-config/probe',{});setModelInfo(old=>({...old,...result}));}
+    catch(e){setError(e.message);}finally{setBusy(false);}
+  }
+  async function revokeModel(){
+    setBusy(true);setError('');
+    try{
+      const response=await fetch('/api/v1/model-config',{method:'DELETE',headers:{'Content-Type':'application/json'},body:'{}'});
+      const result=await response.json();if(!response.ok)throw new Error(result.code);
+      setModelInfo(old=>({...old,...result}));
+    }catch(e){setError(e.message);}finally{setBusy(false);}
+  }
   async function logout() {
     try {
       await api('/api/v1/auth/logout',{});
@@ -195,7 +235,7 @@ function App() {
     <aside>
       <p className="brand">ResearchPilot</p>
       <button className="plain" onClick={() => select('')}>＋ 新建研究</button>
-      <button className="plain" onClick={()=>setSettings(value=>!value)}>模型设置</button>
+      <button className="plain" onClick={()=>{setModelInfo(null);setSettings(value=>!value);}}>模型设置</button>
       <h2>研究历史</h2>
       {!history.length && <p className="muted">暂无任务</p>}
       {history.map(item => <button key={item.task_id} className="history"
@@ -206,15 +246,20 @@ function App() {
     </aside>
     <main>
       {error && <p className="error" role="alert">{error}</p>}
-      {settings ? <form onSubmit={saveModel}>
+      {settings ? (!modelInfo ? <p role="status">正在加载模型设置</p> : <form onSubmit={saveModel}>
         <h1>模型设置</h1>
         {modelInfo?.configured && <p>已配置 {modelInfo.model}，密钥尾号 {modelInfo.key_tail}</p>}
         <label>Base URL<input name="base_url" type="url" defaultValue={modelInfo?.base_url || 'https://api.deepseek.com'} required/></label>
         <label>模型名称<input name="model" defaultValue={modelInfo?.model || 'deepseek-flash'} required/></label>
-        <label>API Key<input name="api_key" type="password" autoComplete="off" required/></label>
+        <label>API Key<input name="api_key" type="password" autoComplete="off" required={!modelInfo?.configured} placeholder={modelInfo?.configured?'留空保留现有密钥，填写新值则替换':''}/></label>
         <p className="muted">保存后，新任务使用该配置版本。</p>
         <button disabled={busy}>加密保存</button>
-      </form> : !selected ? <form onSubmit={submit}>
+        {modelInfo?.configured && <>
+          <button type="button" disabled={busy} onClick={probeModel}>检查连接与能力</button>
+          <button type="button" disabled={busy} onClick={revokeModel}>撤销全部已保存密钥版本</button>
+        </>}
+        {modelInfo?.capabilities && <pre>{JSON.stringify(modelInfo.capabilities,null,2)}</pre>}
+      </form>) : !selected ? <form onSubmit={submit}>
         <h1>新建研究</h1>
         <label>研究目标<textarea value={goal} onChange={event=>setGoal(event.target.value)}
           maxLength={2000} rows={5} placeholder="例如：比较 Gin 和 Hertz 的 SSE 集成方式" required/></label>
@@ -225,8 +270,11 @@ function App() {
         {task && !terminal(task.status) && <button disabled={task.status==='CANCELLING'} onClick={cancelTask}>取消研究</button>}
         {connection && <p className="muted" aria-live="polite">{connection}</p>}
         <div className="result">
-          <section><h2>研究报告</h2>{report ? <pre>{report}</pre> : <p className="muted">{task?.status==='FAILED' ? '任务超时，未生成报告。' : '报告生成后会显示在这里。'}</p>}</section>
+          <section><h2>研究报告</h2>{report ? <pre>{report}</pre> : <p className="muted">{task?.status==='FAILED' ? '研究未完成：'+(errors[task.error_code] || task.error_code || '请查看运行记录') : '报告生成后会显示在这里。'}</p>}</section>
           <section><h2>运行记录</h2>
+            <ul>{task?.calls?.map(call=><li key={call.tool_call_id}>
+              {call.tool_call_id} · 第 {call.attempt_no} 次 · {call.status}
+            </li>)}</ul>
             <ol>{events.map(item=><li key={item.seq}>
               {item.type==='tool_finished'?item.payload.summary : labels[item.payload.status] || item.type}
             </li>)}</ol>

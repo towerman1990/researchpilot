@@ -32,6 +32,15 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,7 +51,7 @@ jobs:
       - name: Check formatting
         shell: bash
         run: |
-          files="$(gofmt -l cmd)"
+          files="$(gofmt -l cmd internal)"
           if [ -n "$files" ]; then
             printf 'Run gofmt on:\n%s\n' "$files"
             exit 1
@@ -57,6 +66,7 @@ jobs:
           openssl rand -hex 32 > "$RUNNER_TEMP/model-master.key"
       - name: Migration and durable execution integration tests
         env:
+          TEST_REDIS_ADDR: 127.0.0.1:6379
           TEST_MYSQL_DSN: root:ci-only-password@tcp(127.0.0.1:3306)/researchpilot_ci
           MODEL_MASTER_KEY_FILE: ${{ runner.temp }}/model-master.key
           MIGRATIONS_DIR: ${{ github.workspace }}/migrations
@@ -115,11 +125,17 @@ jobs:
       - name: Verify demo lifecycle, tenancy, idempotency and SSE
         shell: pwsh
         run: ./scripts/smoke.ps1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Browser smoke
+        run: node scripts/browser-smoke.mjs
       - name: Container diagnostics on failure
         if: failure()
         run: |
           docker compose ps -a
           docker compose logs --no-color --tail=200
+          if [ -f .cache/browser-startup.log ]; then tail -60 .cache/browser-startup.log; fi
       - name: Clean up isolated CI resources
         if: always()
         run: |

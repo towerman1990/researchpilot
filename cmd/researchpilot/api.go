@@ -21,8 +21,10 @@ import (
 )
 
 type apiServer struct {
-	db     *sql.DB
-	origin string
+	db        *sql.DB
+	origin    string
+	limiter   rateLimiter
+	modelHTTP *http.Client
 }
 
 func (a *apiServer) routes() http.Handler {
@@ -48,13 +50,15 @@ func (a *apiServer) routes() http.Handler {
 	m.HandleFunc("POST /api/v1/research/tasks/{id}/cancel", a.protected(a.cancelTask))
 	m.HandleFunc("GET /api/v1/model-config", a.protected(a.modelConfig))
 	m.HandleFunc("PUT /api/v1/model-config", a.protected(a.modelConfig))
+	m.HandleFunc("DELETE /api/v1/model-config", a.protected(a.revokeModel))
+	m.HandleFunc("POST /api/v1/model-config/probe", a.protected(a.probeModel))
 	m.HandleFunc("GET /api/v1/research/tasks/{id}/sources/{source}", a.protected(a.sources))
 	m.Handle("GET /", http.FileServer(http.Dir(env("WEB_DIR", "web/dist"))))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
-			if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 				origin := r.Header.Get("Origin")
 				if (origin != "" && origin != a.origin) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 					problem(w, 403, "origin_forbidden")
@@ -103,6 +107,9 @@ type credentials struct {
 
 func (a *apiServer) register(w http.ResponseWriter, r *http.Request) {
 	var c credentials
+	if !a.allow(w, r, "auth-ip", clientAddress(r), quota("RATE_AUTH_IP", 30)) {
+		return
+	}
 	if !parse(w, r, &c) {
 		return
 	}
@@ -141,7 +148,13 @@ var dummyPassword, _ = bcrypt.GenerateFromPassword([]byte("unused-comparison-val
 
 func (a *apiServer) login(w http.ResponseWriter, r *http.Request) {
 	var c credentials
+	if !a.allow(w, r, "auth-ip", clientAddress(r), quota("RATE_AUTH_IP", 30)) {
+		return
+	}
 	if !parse(w, r, &c) {
+		return
+	}
+	if !a.allow(w, r, "login-account", accountSubject(c.Email), quota("RATE_LOGIN_ACCOUNT", 10)) {
 		return
 	}
 	var user string
@@ -222,26 +235,61 @@ func (a *apiServer) logout(w http.ResponseWriter, r *http.Request, _ string) {
 }
 
 type snapshot struct {
-	ID             string  `json:"task_id"`
-	Goal           string  `json:"goal"`
-	Status         string  `json:"status"`
-	Phase          *string `json:"phase"`
-	Seq            uint64  `json:"event_seq,string"`
-	Error          *string `json:"error_code,omitempty"`
-	TokensUsed     uint32  `json:"tokens_used"`
-	TokensReserved uint32  `json:"tokens_reserved"`
-	TokenLimit     uint32  `json:"token_limit"`
+	ID             string         `json:"task_id"`
+	Goal           string         `json:"goal"`
+	Status         string         `json:"status"`
+	Phase          *string        `json:"phase"`
+	Seq            uint64         `json:"event_seq,string"`
+	Error          *string        `json:"error_code,omitempty"`
+	TokensUsed     uint32         `json:"tokens_used"`
+	TokensReserved uint32         `json:"tokens_reserved"`
+	TokenLimit     uint32         `json:"token_limit"`
+	MinSeq         uint64         `json:"min_event_seq,string"`
+	Calls          []callSnapshot `json:"calls,omitempty"`
 }
 
-const taskColumns = "id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit"
+const taskColumns = "id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq"
+
+type callSnapshot struct {
+	ID      string `json:"tool_call_id"`
+	Attempt uint32 `json:"attempt_no"`
+	Status  string `json:"status"`
+}
 
 func (a *apiServer) readTask(ctx context.Context, tenant, id string) (s snapshot, err error) {
-	err = a.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM research_tasks WHERE tenant_id=? AND id=?", tenant, id).
-		Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error, &s.TokensUsed, &s.TokensReserved, &s.TokenLimit)
-	return s, err
+	tx, err := a.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return s, err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM research_tasks WHERE tenant_id=? AND id=?", tenant, id).Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error, &s.TokensUsed, &s.TokensReserved, &s.TokenLimit, &s.MinSeq)
+	if err != nil {
+		return s, err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT a.step_key,a.attempt_no,a.status FROM execution_attempts a WHERE tenant_id=? AND task_id=? AND attempt_no=(SELECT MAX(b.attempt_no) FROM execution_attempts b WHERE b.tenant_id=a.tenant_id AND b.task_id=a.task_id AND b.step_key=a.step_key) ORDER BY a.step_key", tenant, id)
+	if err != nil {
+		return s, err
+	}
+	for rows.Next() {
+		var c callSnapshot
+		if err = rows.Scan(&c.ID, &c.Attempt, &c.Status); err != nil {
+			rows.Close()
+			return s, err
+		}
+		s.Calls = append(s.Calls, c)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return s, err
+	}
+	return s, tx.Commit()
 }
 
 func (a *apiServer) createTask(w http.ResponseWriter, r *http.Request, tenant string) {
+	if !a.allow(w, r, "task-create", tenant, quota("RATE_TASK_CREATE", 10)) {
+		return
+	}
 	var input struct{ Goal string }
 	if !parse(w, r, &input) {
 		return
@@ -262,7 +310,7 @@ func (a *apiServer) createTask(w http.ResponseWriter, r *http.Request, tenant st
 	defer tx.Rollback()
 
 	id := identifier(16)
-	if _, err = tx.ExecContext(ctx, "INSERT INTO research_tasks(id,tenant_id,goal,status,deadline_at,event_seq,runtime_version) VALUES(?,?,?,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.1')", id, tenant, input.Goal); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO research_tasks(id,tenant_id,goal,status,deadline_at,event_seq,runtime_version) VALUES(?,?,?,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2')", id, tenant, input.Goal); err != nil {
 		internal(w, err)
 		return
 	}
@@ -272,6 +320,15 @@ func (a *apiServer) createTask(w http.ResponseWriter, r *http.Request, tenant st
 		return
 	}
 	if modelVersion > 0 {
+		var revoked bool
+		if err = tx.QueryRowContext(ctx, "SELECT revoked FROM model_configs WHERE tenant_id=? AND version=?", tenant, modelVersion).Scan(&revoked); err != nil {
+			internal(w, err)
+			return
+		}
+		if revoked {
+			problem(w, 409, "model_configuration_revoked")
+			return
+		}
 		if _, err = tx.ExecContext(ctx, "UPDATE research_tasks SET model_version=? WHERE tenant_id=? AND id=?", modelVersion, tenant, id); err != nil {
 			internal(w, err)
 			return
@@ -326,7 +383,7 @@ func (a *apiServer) listTasks(w http.ResponseWriter, r *http.Request, tenant str
 	tasks := make([]snapshot, 0)
 	for rows.Next() {
 		var s snapshot
-		if err = rows.Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error, &s.TokensUsed, &s.TokensReserved, &s.TokenLimit); err != nil {
+		if err = rows.Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error, &s.TokensUsed, &s.TokensReserved, &s.TokenLimit, &s.MinSeq); err != nil {
 			internal(w, err)
 			return
 		}
@@ -444,11 +501,24 @@ func (a *apiServer) events(w http.ResponseWriter, r *http.Request, tenant string
 	if send(": connected\n\n") != nil {
 		return
 	}
+	if cursorExpired(cursor, s.MinSeq) {
+		_ = send("event: reset\ndata: {\"reason\":\"cursor_expired\"}\n\n")
+		return
+	}
+
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
+		s, err = a.readTask(ctx, tenant, id)
+		if err != nil {
+			return
+		}
+		if cursorExpired(cursor, s.MinSeq) {
+			_ = send("event: reset\ndata: {\"reason\":\"cursor_expired\"}\n\n")
+			return
+		}
 		batch, err := a.readEvents(ctx, tenant, id, cursor)
 		if err != nil {
 			return
@@ -478,3 +548,5 @@ func (a *apiServer) events(w http.ResponseWriter, r *http.Request, tenant string
 		}
 	}
 }
+
+func cursorExpired(cursor, minimum uint64) bool { return minimum > 1 && cursor < minimum-1 }

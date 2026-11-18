@@ -12,3 +12,7 @@
 8. [路线图、部署与验收](07-ROADMAP.md)
 9. [M2 研究与恢复详细设计](08-M2-DESIGN.md)
 10. [M2 开发进度与本地验证](09-M2-IMPLEMENTATION.md)
+
+- [M2 收尾与放行记录](10-M2-CLOSEOUT.md)
+
+- [M2 真实评估与证据复核](11-M2-EVALUATION.md)

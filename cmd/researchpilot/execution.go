@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -55,7 +57,7 @@ func (e execution) keepAlive(ctx context.Context, cancel context.CancelFunc, don
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			result, err := e.db.ExecContext(ctx, "UPDATE research_tasks SET lease_until=LEAST(deadline_at,UTC_TIMESTAMP(6)+INTERVAL 30 SECOND) WHERE tenant_id=? AND id=? AND status='RUNNING' AND lease_epoch=? AND lease_until>UTC_TIMESTAMP(6) AND deadline_at>UTC_TIMESTAMP(6)", e.Tenant, e.Task, e.epoch)
+			result, err := e.db.ExecContext(ctx, "UPDATE research_tasks SET lease_until=LEAST(deadline_at,UTC_TIMESTAMP(6)+INTERVAL 30 SECOND) WHERE tenant_id=? AND id=? AND status='RUNNING' AND lease_epoch=? AND lease_until>UTC_TIMESTAMP(6) AND deadline_at>UTC_TIMESTAMP(6) AND (model_version IS NULL OR EXISTS(SELECT 1 FROM model_configs m WHERE m.tenant_id=research_tasks.tenant_id AND m.version=research_tasks.model_version AND m.revoked=false))", e.Tenant, e.Task, e.epoch)
 			if err != nil {
 				cancel()
 				return
@@ -99,11 +101,26 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 	if err != nil {
 		return "", err
 	}
-	value, runErr := run(ctx)
+	started := time.Now()
+	value, runErr := run(context.WithValue(ctx, modelCallKey{}, key))
+	slog.Info("execution_step", "task_id", e.Task, "trace_id", e.Task, "step", key, "attempt", attempt, "elapsed_ms", time.Since(started).Milliseconds(), "ok", runErr == nil)
 	if runErr != nil {
 		return "", runErr
 	}
 	err = e.mutate(ctx, func(tx *sql.Tx, t taskRow) error {
+		if strings.HasPrefix(key, "tool-") {
+			var sources []evidence
+			if json.Unmarshal([]byte(value), &sources) == nil && len(sources) > 0 {
+				if err := storeSources(ctx, tx, e.delivery, sources); err != nil {
+					return err
+				}
+				encoded, err := json.Marshal(sources)
+				if err != nil {
+					return err
+				}
+				value = string(encoded)
+			}
+		}
 		raw, err := json.Marshal(value)
 		if err != nil {
 			return err
@@ -112,15 +129,20 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE execution_attempts SET status='SUCCEEDED',finished_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND task_id=? AND step_key=? AND attempt_no=? AND lease_epoch=?", e.Tenant, e.Task, key, attempt, e.epoch)
-		if err != nil {
-			return err
-		}
 		status, summary := "SUCCEEDED", "步骤结果已保存"
 		var observation struct{ Error string }
 		if json.Unmarshal([]byte(value), &observation) == nil && observation.Error != "" {
 			status = "FAILED"
-			summary = observation.Error
+			summary = clip(observation.Error, 128)
+		}
+		_, err = tx.ExecContext(ctx, "UPDATE execution_attempts SET status=?,error_code=NULLIF(?,''),finished_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND task_id=? AND step_key=? AND attempt_no=? AND lease_epoch=?", status, func() string {
+			if status == "FAILED" {
+				return summary
+			}
+			return ""
+		}(), e.Tenant, e.Task, key, attempt, e.epoch)
+		if err != nil {
+			return err
 		}
 		return eventUpdate(ctx, tx, e.delivery, t, "tool_finished", map[string]any{"step_key": key, "tool_call_id": key, "attempt_no": attempt, "status": status, "summary": summary})
 	})
@@ -138,9 +160,24 @@ func settleReservations(ctx context.Context, tx *sql.Tx, d delivery) error {
 	return err
 }
 
+type modelCallKey struct{}
+
 func (e execution) reserve(ctx context.Context, tokens uint32) (string, error) {
 	id := identifier(16)
 	err := e.mutate(ctx, func(tx *sql.Tx, _ taskRow) error {
+		var logical any
+		var attempt any
+		if key, ok := ctx.Value(modelCallKey{}).(string); ok && key != "" {
+			var n uint32
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM model_attempts WHERE tenant_id=? AND task_id=? AND logical_key=?", e.Tenant, e.Task, key).Scan(&n); err != nil {
+				return err
+			}
+			if n >= 3 {
+				return errors.New("model_retry_exhausted")
+			}
+			logical = key
+			attempt = n + 1
+		}
 		result, err := tx.ExecContext(ctx, "UPDATE research_tasks SET tokens_reserved=tokens_reserved+? WHERE tenant_id=? AND id=? AND tokens_used+tokens_reserved+?<=token_limit", tokens, e.Tenant, e.Task, tokens)
 		if err != nil {
 			return err
@@ -152,13 +189,16 @@ func (e execution) reserve(ctx context.Context, tokens uint32) (string, error) {
 		if count != 1 {
 			return errBudget
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO model_attempts(tenant_id,task_id,attempt_id,lease_epoch,status,reserved_tokens) VALUES(?,?,?,?,'RESERVED',?)", e.Tenant, e.Task, id, e.epoch, tokens)
+		_, err = tx.ExecContext(ctx, "INSERT INTO model_attempts(tenant_id,task_id,attempt_id,lease_epoch,status,reserved_tokens,logical_key,attempt_no) VALUES(?,?,?,?,'RESERVED',?,?,?)", e.Tenant, e.Task, id, e.epoch, tokens, logical, attempt)
 		return err
 	})
 	return id, err
 }
 
 func (e execution) settle(ctx context.Context, id string, used uint32, estimated bool) error {
+	return e.settleOutcome(ctx, id, used, estimated, "")
+}
+func (e execution) settleOutcome(ctx context.Context, id string, used uint32, estimated bool, failure string) error {
 	return e.mutate(ctx, func(tx *sql.Tx, t taskRow) error {
 		var reserved uint32
 		var status string
@@ -173,7 +213,7 @@ func (e execution) settle(ctx context.Context, id string, used uint32, estimated
 			used = reserved
 			status = "ESTIMATED"
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE model_attempts SET status=?,charged_tokens=?,settled_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND task_id=? AND attempt_id=?", status, used, e.Tenant, e.Task, id)
+		_, err := tx.ExecContext(ctx, "UPDATE model_attempts SET status=?,charged_tokens=?,error_code=NULLIF(?,''),settled_at=UTC_TIMESTAMP(6) WHERE tenant_id=? AND task_id=? AND attempt_id=?", status, used, failure, e.Tenant, e.Task, id)
 		if err != nil {
 			return err
 		}
@@ -196,6 +236,15 @@ func finishTask(ctx context.Context, tx *sql.Tx, d delivery, t taskRow, status, 
 	_, err = tx.ExecContext(ctx, "UPDATE research_tasks SET status=?,phase=NULL,lease_until=NULL,finished_at=UTC_TIMESTAMP(6),error_code=NULLIF(?,'') WHERE tenant_id=? AND id=?", status, code, d.Tenant, d.Task)
 	if err != nil {
 		return err
+	}
+	if status == "FAILED" {
+		published, err := publishPartial(ctx, tx, d, t, code)
+		if err != nil {
+			return err
+		}
+		if published {
+			return nil
+		}
 	}
 	return eventUpdate(ctx, tx, d, t, "task_status", map[string]string{"status": status, "error_code": code})
 }
@@ -221,6 +270,8 @@ func (e execution) failed(ctx context.Context, cause error) error {
 		err = finishTask(ctx, tx, e.delivery, t, "FAILED", "deadline_exceeded")
 	} else if errors.Is(cause, errBudget) {
 		err = finishTask(ctx, tx, e.delivery, t, "FAILED", "budget_exhausted")
+	} else if permanentFailure(cause) {
+		err = finishTask(ctx, tx, e.delivery, t, "FAILED", safeFailureCode(cause))
 	} else if t.retries >= 2 {
 		err = finishTask(ctx, tx, e.delivery, t, "FAILED", "retry_exhausted")
 	} else {
@@ -294,4 +345,35 @@ func (r runner) executeDurable(ctx context.Context, d delivery, t taskRow) error
 		return fmt.Errorf("settle execution failure: %w", failureErr)
 	}
 	return nil
+}
+
+func permanentFailure(err error) bool {
+	var exhausted *modelAttemptsExhausted
+	if errors.As(err, &exhausted) {
+		return true
+	}
+	var upstream *modelError
+	if errors.As(err, &upstream) {
+		return !upstream.Retryable()
+	}
+	switch err.Error() {
+	case "insufficient_evidence", "model_output_truncated", "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_tls_failed", "model_retry_exhausted", "model_configuration_revoked", "invalid_model_config", "invalid_report_json", "invalid_source_id", "no_evidence":
+		return true
+	}
+	return false
+}
+func safeFailureCode(err error) string {
+	var exhausted *modelAttemptsExhausted
+	if errors.As(err, &exhausted) {
+		return exhausted.Cause.Error()
+	}
+	var upstream *modelError
+	if errors.As(err, &upstream) {
+		return upstream.Error()
+	}
+	switch err.Error() {
+	case "insufficient_evidence", "model_output_truncated", "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_tls_failed", "model_retry_exhausted", "model_configuration_revoked", "invalid_model_config", "invalid_report_json", "invalid_source_id", "no_evidence":
+		return err.Error()
+	}
+	return "execution_failed"
 }

@@ -2,3 +2,12 @@ web/node_modules
 web/dist
 .cache
 .git
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+.secrets
+secrets
+.tokens
+tokens

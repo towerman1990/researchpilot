@@ -1,0 +1,1 @@
+ALTER TABLE model_attempts ADD logical_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL, ADD attempt_no INT UNSIGNED NULL, ADD UNIQUE KEY uq_model_logical_attempt(tenant_id,task_id,logical_key,attempt_no);

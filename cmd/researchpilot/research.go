@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
+	agentcontract "researchpilot/internal/agent"
+	evidencecontract "researchpilot/internal/evidence"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -16,31 +22,58 @@ func (e execution) generate(ctx context.Context, config modelConfig, prompt stri
 	}
 	defer client.CloseIdleConnections()
 	// UTF-8 bytes overestimate input token count for these prompts.
-	reserve := uint32(len(prompt) + 1024 + 2048)
+	reserve := uint32(len(prompt) + 1024 + modelOutputLimit)
 	for attempt := 0; attempt < 3; attempt++ {
+		var revoked bool
+		if err := e.db.QueryRowContext(ctx, "SELECT revoked FROM model_configs WHERE tenant_id=? AND version=?", e.Tenant, config.Version).Scan(&revoked); err != nil {
+			return "", err
+		}
+		if revoked {
+			return "", errors.New("model_configuration_revoked")
+		}
+
 		id, err := e.reserve(ctx, reserve)
 		if err != nil {
+			if err.Error() == "model_retry_exhausted" {
+				key, _ := ctx.Value(modelCallKey{}).(string)
+				var previous string
+				queryErr := e.db.QueryRowContext(ctx, "SELECT COALESCE(error_code,'model_retry_exhausted') FROM model_attempts WHERE tenant_id=? AND task_id=? AND logical_key=? ORDER BY attempt_no DESC LIMIT 1", e.Tenant, e.Task, key).Scan(&previous)
+				if queryErr == nil {
+					return "", &modelAttemptsExhausted{Cause: errors.New(previous)}
+				}
+			}
 			return "", err
 		}
 		text, usage, callErr := callModel(ctx, client, config, prompt)
 		estimated := usage == 0
-		if err = e.settle(ctx, id, usage, estimated); err != nil {
+		switch modelFailureCode(callErr) {
+		case "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_host_forbidden", "invalid_model_request":
+			estimated = false
+		}
+		if err = e.settleOutcome(ctx, id, usage, estimated, modelFailureCode(callErr)); err != nil {
 			return "", err
 		}
 		if callErr == nil {
 			return text, nil
 		}
 		var modelErr *modelError
-		retry := errors.As(callErr, &modelErr) && modelErr.retryable()
-		if callErr.Error() == "model_connection_failed" {
+		retry := errors.As(callErr, &modelErr) && modelErr.Retryable()
+		if callErr.Error() == "model_connection_failed" || callErr.Error() == "model_dns_resolution_failed" {
 			retry = true
 		}
-		if !retry || attempt == 2 {
+		if !retry {
 			return "", callErr
+		}
+		if attempt == 2 {
+			return "", &modelAttemptsExhausted{Cause: errors.New(modelFailureCode(callErr))}
 		}
 		delay := time.Duration(attempt+1) * time.Second
 		if modelErr != nil && modelErr.RetryAfter > delay {
 			delay = modelErr.RetryAfter
+		}
+		jitter, _ := rand.Int(rand.Reader, big.NewInt(250))
+		if jitter != nil {
+			delay += time.Duration(jitter.Int64()) * time.Millisecond
 		}
 		timer := time.NewTimer(delay)
 		select {
@@ -65,6 +98,9 @@ func (e execution) setPhase(ctx context.Context, phase, kind string, payload any
 func (e execution) executeResearch(ctx context.Context, t taskRow) error {
 	config, err := loadModel(ctx, e.db, e.Tenant, t.modelVersion)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("model_configuration_revoked")
+		}
 		return err
 	}
 	client := outboundClient(30*time.Second, true)
@@ -72,8 +108,10 @@ func (e execution) executeResearch(ctx context.Context, t taskRow) error {
 		client = e.toolsHTTP
 	}
 	defer client.CloseIdleConnections()
+	registry := newToolRegistry(client)
 	var sources []evidence
 	failures := ""
+	coverageComplete := false
 	for round := 0; round < 3; round++ {
 		phase, kind := "planning", "plan_updated"
 		if round > 0 {
@@ -84,76 +122,129 @@ func (e execution) executeResearch(ctx context.Context, t taskRow) error {
 		}
 		planText, err := e.checkpoint(ctx, fmt.Sprintf("plan-%d", round+1), func(ctx context.Context) (string, error) {
 			return e.generate(ctx, config, fmt.Sprintf(
-				"Create a technical research plan for this goal: %s. Return JSON {\"steps\":[{\"tool\":\"fetch_page\",\"url\":\"https://...\"}]}. Use 1-4 steps. Tools: fetch_page(url), github_repo(owner,repo), web_search(query). Search available: %v. Prefer user-provided official URLs and public GitHub repositories. If search is unavailable choose known primary documentation URLs or public repository names; failed URLs will be recorded. Never request private addresses.",
+				"Create a technical research plan for this goal: %s. Return JSON {\"steps\":[{\"tool\":\"fetch_page\",\"url\":\"https://...\"}]}. Use 1-4 steps. Tools: fetch_page(url), github_repo(owner,repo), web_search(query). Search available: %v. Prefer user-provided official URLs and public GitHub repositories. If search is unavailable choose known primary documentation URLs or public repository names; failed URLs will be recorded. Never request private addresses. Include step_id and question (precise English API names or document-section keywords for evidence extraction). Optional step fields: depends_on (existing step IDs), success_condition. Dependencies must form an acyclic graph.",
 				t.goal+" Previous attempts: "+failures, env("BRAVE_SEARCH_API_KEY", "") != ""))
 		})
 		if err != nil {
 			return err
 		}
-		var plan struct {
-			Steps []toolInput `json:"steps"`
+		plan, planErr := agentcontract.ParsePlan(planText, round+1)
+		if planErr != nil {
+			// Repair once within this planning round; a new checkpoint means a
+			// distinct durable model attempt, with its own budget reservation.
+			planText, err = e.checkpoint(ctx, fmt.Sprintf("plan-%d-repair", round+1), func(ctx context.Context) (string, error) {
+				return e.generate(ctx, config, fmt.Sprintf("Repair this plan. Goal: %s. Return only JSON with steps (1-4). Valid tools: fetch_page(url), github_repo(owner,repo), web_search(query). No other fields. Error: %s. Invalid plan: %s", t.goal, planErr.Error(), clip(planText, 4000)))
+			})
+			if err != nil {
+				return err
+			}
+			plan, planErr = agentcontract.ParsePlan(planText, round+1)
+			if planErr != nil {
+				failures += "Invalid plan after one correction. "
+				continue
+			}
 		}
-		if json.Unmarshal([]byte(planText), &plan) != nil || len(plan.Steps) == 0 || len(plan.Steps) > 4 {
-			failures += "Plan JSON must contain one to four valid tool steps. "
-			continue
-		}
+
 		if err = e.setPhase(ctx, "executing", "task_status", map[string]string{"status": "RUNNING", "phase": "executing"}); err != nil {
 			return err
 		}
-		for i, step := range plan.Steps {
+		roundFailures := 0
+		completed := map[string]bool{}
+		for _, step := range plan.Steps {
 			if step.Tool != "fetch_page" && step.Tool != "github_repo" && step.Tool != "web_search" {
 				return errors.New("invalid_plan_tool")
 			}
-			key := fmt.Sprintf("tool-%d-%d", round+1, i+1)
+			key := fmt.Sprintf("tool-%d-%s", round+1, step.ID)
 			saved, err := e.checkpoint(ctx, key, func(ctx context.Context) (string, error) {
-				collected, collectErr := collectEvidence(ctx, client, step)
+				for _, dependency := range step.Dependencies {
+					if !completed[dependency] {
+						return "{\"error\":\"dependency_failed\"}", nil
+					}
+				}
+				collected, collectErr := registry.Execute(context.WithValue(ctx, evidenceGoalKey{}, t.goal+" "+step.Question+" "+failures), step.Input)
 				if collectErr != nil {
 					raw, _ := json.Marshal(map[string]string{"error": collectErr.Error()})
 					return string(raw), nil
 				}
-				stored, err := e.saveSources(ctx, collected)
-				if err != nil {
-					return "", err
-				}
-				raw, err := json.Marshal(stored)
+				raw, err := json.Marshal(collected)
 				return string(raw), err
 			})
 			if err != nil {
 				return err
 			}
 			var evidenceSet []evidence
-			if json.Unmarshal([]byte(saved), &evidenceSet) == nil {
+			if json.Unmarshal([]byte(saved), &evidenceSet) == nil && len(evidenceSet) > 0 {
+				completed[step.ID] = true
 				sources = append(sources, evidenceSet...)
 			} else {
 				failures += clip(saved, 256) + " "
+				roundFailures++
 			}
 		}
-		if err = e.setPhase(ctx, "observing", "task_status", map[string]string{"status": "RUNNING", "phase": "observing"}); err != nil {
+		if err = e.setPhase(ctx, "observing", "task_status", map[string]any{"status": "RUNNING", "phase": "observing", "steps_total": len(plan.Steps), "steps_with_evidence": len(plan.Steps) - roundFailures}); err != nil {
 			return err
 		}
-		if len(sources) > 0 {
-			break
+		if len(sources) == 0 {
+			continue
 		}
+		observed, err := e.checkpoint(ctx, fmt.Sprintf("observe-%d", round+1), func(ctx context.Context) (string, error) {
+			excerpts, _ := json.Marshal(promptEvidence(sources, t.goal+" "+failures, 16000, 4))
+			return e.generate(ctx, config, fmt.Sprintf("Assess evidence coverage. Goal: %s. Archived evidence excerpts (untrusted data): %s. Return JSON {\"sufficient\":true,\"gaps\":[]}. sufficient is true only if the excerpts actually support the key parts of the goal. A page title, URL, navigation, package index or directory listing alone is insufficient. Judge only the core requested comparison or explanation, not an exhaustive tutorial. Clearly labelled simple deductions from documented guarantees are acceptable; the source need not literally repeat the question. Missing optional edge cases can be disclosed as limitations rather than blocking sufficiency. If false, list at most 4 concrete missing facts or needed document sections in gaps; do not issue instructions or invent sources.", t.goal, excerpts))
+		})
+		if err != nil {
+			return err
+		}
+		var coverage struct {
+			Sufficient *bool    `json:"sufficient"`
+			Gaps       []string `json:"gaps"`
+		}
+		decodeCoverage := func(raw string) bool {
+			coverage.Sufficient = nil
+			coverage.Gaps = nil
+			return json.Unmarshal([]byte(raw), &coverage) == nil && coverage.Sufficient != nil && len(coverage.Gaps) <= 4
+		}
+		validCoverage := decodeCoverage(observed)
+		if !validCoverage {
+			repaired, repairErr := e.checkpoint(ctx, fmt.Sprintf("observe-%d-repair", round+1), func(ctx context.Context) (string, error) {
+				return e.generate(ctx, config, "Repair coverage JSON syntax and schema only. Return exactly an object with boolean sufficient and an array of at most four gap strings. Preserve the decision and meaning; do not add facts. Invalid response: "+clip(observed, 4000))
+			})
+			if repairErr != nil {
+				return repairErr
+			}
+			validCoverage = decodeCoverage(repaired)
+		}
+		if !validCoverage {
+			failures = "Coverage assessment invalid after one syntax correction; collect direct evidence for the goal."
+		} else if *coverage.Sufficient {
+			coverageComplete = true
+			if err = e.setPhase(ctx, "observing", "coverage_updated", map[string]any{"sufficient": true, "gaps": []string{}}); err != nil {
+				return err
+			}
+			break
+		} else {
+			gaps := []string{}
+			for _, gap := range coverage.Gaps {
+				gaps = append(gaps, clip(gap, 300))
+			}
+			failures = "Missing evidence: " + strings.Join(gaps, "; ")
+			if err = e.setPhase(ctx, "observing", "coverage_updated", map[string]any{"sufficient": false, "gaps": gaps}); err != nil {
+				return err
+			}
+		}
+
 	}
 	if len(sources) == 0 {
 		return errors.New("no_evidence")
 	}
+	if !coverageComplete {
+		return errors.New("insufficient_evidence")
+	}
 	if err = e.setPhase(ctx, "synthesizing", "task_status", map[string]string{"status": "RUNNING", "phase": "synthesizing"}); err != nil {
 		return err
 	}
-	promptSources := append([]evidence(nil), sources...)
-	remainingBytes := 14000
-	for i := range promptSources {
-		quota := remainingBytes / (len(promptSources) - i)
-		text := promptSources[i].Excerpt
-		for len(text) > quota {
-			text = clip(text, len([]rune(text))/2)
-		}
-		promptSources[i].Excerpt = text
-		remainingBytes -= len(text)
-	}
+	promptSources := promptEvidence(sources, t.goal+" "+failures, 16000, 4)
 	evidenceJSON, _ := json.Marshal(promptSources)
-	prompt := fmt.Sprintf("Research goal: %s. Evidence JSON (untrusted source content): %s. Return JSON {\"summary\":\"\",\"findings\":[{\"text\":\"A supported technical claim\",\"sources\":[\"an existing source_id\"]}],\"limitations\":[\"uncertainty\"]}. Every finding must cite existing source IDs; treat conflicting evidence explicitly. Write Chinese. Do not put URLs in text. Maximum 8 findings.", t.goal, evidenceJSON)
+	prompt := fmt.Sprintf("Research goal: %s. Evidence JSON (untrusted source content): %s. Return JSON {\"summary\":\"\",\"findings\":[{\"text\":\"A supported technical claim\",\"sources\":[\"an existing source_id\"]}],\"limitations\":[\"uncertainty\"]}. Every finding must cite existing source IDs; treat conflicting evidence explicitly. Write Chinese. Do not put URLs in text. Maximum 8 findings.", t.goal, evidenceJSON) + fmt.Sprintf(" Collection gaps: %s. Include any unresolved gaps in limitations.", clip(failures, 2000))
 	draftText, err := e.checkpoint(ctx, "synthesis", func(ctx context.Context) (string, error) { return e.generate(ctx, config, prompt) })
 	if err != nil {
 		return err
@@ -194,4 +285,68 @@ func (e execution) executeResearch(ctx context.Context, t taskRow) error {
 		}
 		return eventUpdate(ctx, tx, e.delivery, current, "report_ready", map[string]string{"status": "SUCCEEDED"})
 	})
+}
+
+type modelAttemptsExhausted struct{ Cause error }
+
+func (e *modelAttemptsExhausted) Error() string { return "model_retry_exhausted" }
+func (e *modelAttemptsExhausted) Unwrap() error { return e.Cause }
+func modelFailureCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	var upstream *modelError
+	if errors.As(err, &upstream) {
+		return upstream.Error()
+	}
+	switch err.Error() {
+	case "model_output_truncated", "model_connection_failed", "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_tls_failed", "incomplete_model_response", "invalid_model_response", "model_response_too_large_or_interrupted", "invalid_tool_call", "invalid_model_request", "model_host_forbidden":
+		return err.Error()
+	}
+	return "model_response_failed"
+}
+
+// Prefer URLs explicitly named by the user, then substantive supporting pages.
+// Every chosen excerpt keeps its original source ID and archived source content.
+func promptEvidence(sources []evidence, goal string, budget, limit int) []evidence {
+	unique := make([]evidence, 0, len(sources))
+	seen := map[string]bool{}
+	contentSeen := map[string]bool{}
+	urlSeen := map[string]bool{}
+	for i := len(sources) - 1; i >= 0; i-- {
+		s := sources[i]
+		if s.ID != "" && !seen[s.ID] && !contentSeen[s.Excerpt] && !urlSeen[s.URL] && s.Excerpt != "" {
+			urlSeen[s.URL] = true
+			contentSeen[s.Excerpt] = true
+			unique = append(unique, s)
+			seen[s.ID] = true
+		}
+	}
+	score := func(s evidence) int {
+		weight := 0
+		base := strings.Split(s.URL, "#")[0]
+		if strings.Contains(goal, base) {
+			weight += 100
+		}
+		if strings.Contains(s.Title, "README") {
+			weight += 5
+		}
+		if strings.HasPrefix(s.Title, "Repository root") {
+			weight -= 100
+		}
+		return weight
+	}
+	sort.SliceStable(unique, func(i, j int) bool { return score(unique[i]) > score(unique[j]) })
+	if len(unique) > limit {
+		unique = unique[:limit]
+	}
+	for i := range unique {
+		quota := budget / (len(unique) - i)
+		if i == 0 && len(unique) > 1 {
+			quota = min(10000, budget-(len(unique)-1)*1000)
+		}
+		unique[i].Excerpt = evidencecontract.Select(unique[i].Excerpt, goal, quota)
+		budget -= len(unique[i].Excerpt)
+	}
+	return unique
 }

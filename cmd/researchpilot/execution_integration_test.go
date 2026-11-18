@@ -104,7 +104,7 @@ func TestMigrationsIntegration(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE dirty=false").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 3 {
+	if count != 6 {
 		t.Fatalf("ledger count=%d", count)
 	}
 	if err := migrate(ctx, db, dir); err != nil {
