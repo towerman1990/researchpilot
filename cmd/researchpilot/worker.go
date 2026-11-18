@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -49,9 +50,11 @@ func (stubProvider) Report(_ context.Context, goal, observation string) (string,
 }
 
 type runner struct {
-	db    *sql.DB
-	model reportProvider
-	tool  researchTool
+	db        *sql.DB
+	model     reportProvider
+	tool      researchTool
+	modelHTTP *http.Client
+	toolsHTTP *http.Client
 }
 
 func runWorker(ctx context.Context, db *sql.DB, address string) error {
@@ -138,7 +141,7 @@ func relay(ctx context.Context, db *sql.DB, client *asynq.Client, queue string) 
 		}
 		_, err = client.EnqueueContext(ctx, asynq.NewTask(runTask, raw), asynq.Queue(queue),
 			asynq.TaskID(fmt.Sprintf("research:%s:%d", d.Task, d.Generation)), asynq.MaxRetry(2),
-			asynq.Timeout(20*time.Second))
+			asynq.Timeout(6*time.Minute))
 		if err != nil && !errors.Is(err, asynq.ErrTaskIDConflict) {
 			return err // The claim expires and can be retried.
 		}
@@ -155,11 +158,16 @@ type taskRow struct {
 	generation, epoch        uint32
 	seq                      uint64
 	pastDeadline, validLease bool
+	retries                  uint16
+	remaining                time.Duration
+	modelVersion             uint32
 }
 
 func lockTask(ctx context.Context, tx *sql.Tx, d delivery) (t taskRow, err error) {
-	err = tx.QueryRowContext(ctx, "SELECT status,goal,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6),COALESCE(lease_until>UTC_TIMESTAMP(6),0) FROM research_tasks WHERE tenant_id=? AND id=? FOR UPDATE", d.Tenant, d.Task).
-		Scan(&t.status, &t.goal, &t.generation, &t.epoch, &t.seq, &t.pastDeadline, &t.validLease)
+	var seconds float64
+	err = tx.QueryRowContext(ctx, "SELECT status,goal,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6),COALESCE(lease_until>UTC_TIMESTAMP(6),0),retry_count,TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),deadline_at)/1000000.0,COALESCE(model_version,0) FROM research_tasks WHERE tenant_id=? AND id=? FOR UPDATE", d.Tenant, d.Task).
+		Scan(&t.status, &t.goal, &t.generation, &t.epoch, &t.seq, &t.pastDeadline, &t.validLease, &t.retries, &seconds, &t.modelVersion)
+	t.remaining = time.Duration(seconds * float64(time.Second))
 	return t, err
 }
 
@@ -201,45 +209,11 @@ func (r runner) execute(ctx context.Context, task *asynq.Task) error {
 		return err
 	}
 
-	evidence, err := r.tool.Collect(ctx, t.goal)
-	if err != nil {
-		return err
-	}
-	report, err := r.model.Report(ctx, t.goal, evidence)
-	if err != nil {
-		return err
-	}
-
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	current, err := lockTask(ctx, tx, d)
-	if err != nil {
-		return err
-	}
-	if current.status != "RUNNING" || current.epoch != t.epoch || !current.validLease || current.pastDeadline {
-		return nil
-	}
-	seq := current.seq
-	if err = appendEvent(ctx, tx, d.Tenant, d.Task, seq+1, "tool_finished", map[string]string{"tool": "stub", "summary": evidence}); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO research_reports(tenant_id,task_id,markdown) VALUES(?,?,?)", d.Tenant, d.Task, report); err != nil {
-		return err
-	}
-	if err = appendEvent(ctx, tx, d.Tenant, d.Task, seq+2, "report_ready", map[string]string{"status": "SUCCEEDED"}); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE research_tasks SET status='SUCCEEDED',phase=NULL,lease_until=NULL,event_seq=? WHERE tenant_id=? AND id=?", seq+2, d.Tenant, d.Task); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return r.executeDurable(ctx, d, t)
 }
 
 func (r runner) recover(ctx context.Context) error {
-	const query = "SELECT t.tenant_id,t.id FROM research_tasks t LEFT JOIN task_outbox o ON o.tenant_id=t.tenant_id AND o.task_id=t.id AND o.generation=t.generation WHERE (t.status IN ('QUEUED','RUNNING') AND t.deadline_at<=UTC_TIMESTAMP(6)) OR (t.status='RUNNING' AND t.lease_until<=UTC_TIMESTAMP(6)) OR (t.status='QUEUED' AND o.sent_at<=UTC_TIMESTAMP(6)-INTERVAL 60 SECOND) LIMIT 50"
+	const query = "SELECT t.tenant_id,t.id FROM research_tasks t LEFT JOIN task_outbox o ON o.tenant_id=t.tenant_id AND o.task_id=t.id AND o.generation=t.generation WHERE (t.status IN ('QUEUED','RUNNING') AND t.deadline_at<=UTC_TIMESTAMP(6)) OR (t.status='RUNNING' AND t.lease_until<=UTC_TIMESTAMP(6)) OR (t.status='QUEUED' AND o.sent_at<=UTC_TIMESTAMP(6)-INTERVAL 60 SECOND) OR (t.status='CANCELLING' AND t.lease_until<=UTC_TIMESTAMP(6)) OR (t.status='RETRY_WAIT' AND (t.retry_at<=UTC_TIMESTAMP(6) OR t.deadline_at<=UTC_TIMESTAMP(6))) LIMIT 50"
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return err
@@ -279,17 +253,46 @@ func (r runner) recoverTask(ctx context.Context, d delivery) error {
 	if terminal(t.status) {
 		return nil
 	}
-	if t.pastDeadline {
-		if _, err = tx.ExecContext(ctx, "UPDATE research_tasks SET status='FAILED',phase=NULL,lease_until=NULL,error_code='deadline_exceeded',event_seq=? WHERE tenant_id=? AND id=?", t.seq+1, d.Tenant, d.Task); err != nil {
+	if t.status == "CANCELLING" {
+		if t.validLease {
+			return nil
+		}
+		if err = finishTask(ctx, tx, d, t, "CANCELLED", ""); err != nil {
 			return err
 		}
-		if err = appendEvent(ctx, tx, d.Tenant, d.Task, t.seq+1, "task_status", map[string]string{"status": "FAILED", "error_code": "deadline_exceeded"}); err != nil {
+		return tx.Commit()
+	}
+	if t.pastDeadline {
+		if err = finishTask(ctx, tx, d, t, "FAILED", "deadline_exceeded"); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
 	if t.status == "RUNNING" && t.validLease {
 		return nil
+	}
+	if t.status == "RUNNING" {
+		if t.retries >= 2 {
+			if err = finishTask(ctx, tx, d, t, "FAILED", "retry_exhausted"); err != nil {
+				return err
+			}
+			return tx.Commit()
+		}
+		if err = settleReservations(ctx, tx, d); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE research_tasks SET retry_count=retry_count+1 WHERE tenant_id=? AND id=?", d.Tenant, d.Task); err != nil {
+			return err
+		}
+	}
+	if t.status == "RETRY_WAIT" {
+		var due bool
+		if err = tx.QueryRowContext(ctx, "SELECT retry_at<=UTC_TIMESTAMP(6) FROM research_tasks WHERE tenant_id=? AND id=?", d.Tenant, d.Task).Scan(&due); err != nil {
+			return err
+		}
+		if !due {
+			return nil
+		}
 	}
 	if t.status == "QUEUED" {
 		var due bool

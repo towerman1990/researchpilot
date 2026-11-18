@@ -1,5 +1,7 @@
 # ResearchPilot M1
 
+M2 开发已开始，当前实现、验证范围及后续事项见 [M2 开发进度](docs/09-M2-IMPLEMENTATION.md)。更新版本启动前运行 `pwsh -File ./scripts/init-local.ps1`，Compose 的 migrate 服务会升级数据库。
+
 在本地运行研究任务最小闭环。Web 可以注册、登录、提交研究目标、查看历史、实时接收 SSE 事件，并读取 Worker 保存的演示报告。固定工具与模型适配器用于验证数据流。
 
 ## 启动

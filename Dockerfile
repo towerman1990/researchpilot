@@ -16,5 +16,6 @@ FROM alpine:3.22
 WORKDIR /app
 COPY --from=build /researchpilot /usr/local/bin/researchpilot
 COPY --from=web /web/dist /app/web/dist
+COPY migrations/ /app/migrations/
 USER 65532:65532
 ENTRYPOINT ["researchpilot"]

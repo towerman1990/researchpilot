@@ -24,6 +24,13 @@ services:
       interval: 3s
       timeout: 2s
       retries: 20
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment:
+      MYSQL_DSN: rp:rp-local@tcp(mysql:3306)/researchpilot
+    depends_on:
+      mysql: { condition: service_healthy }
   api:
     build: .
     command: ["api"]
@@ -31,16 +38,24 @@ services:
       MYSQL_DSN: rp:rp-local@tcp(mysql:3306)/researchpilot
       REDIS_ADDR: redis:6379
       PUBLIC_ORIGIN: http://localhost:8080
+      MODEL_MASTER_KEY_FILE: /run/secrets/model_master_key
+      MODEL_PROXY_URL: ${MODEL_PROXY_URL:-}
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+    secrets: [model_master_key]
     depends_on:
-      mysql: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     ports: ["127.0.0.1:8080:8080"]
   worker:
     build: .
     command: ["worker"]
     environment: *app-env
+    secrets: [model_master_key]
     depends_on:
-      mysql: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
 volumes:
   mysql-data:
   redis-data:
+secrets:
+  model_master_key:
+    file: ./.cache/model-master.key

@@ -45,12 +45,16 @@ func (a *apiServer) routes() http.Handler {
 	m.HandleFunc("GET /api/v1/research/tasks/{id}", a.protected(a.getTask))
 	m.HandleFunc("GET /api/v1/research/tasks/{id}/events", a.protected(a.events))
 	m.HandleFunc("GET /api/v1/research/tasks/{id}/report", a.protected(a.report))
+	m.HandleFunc("POST /api/v1/research/tasks/{id}/cancel", a.protected(a.cancelTask))
+	m.HandleFunc("GET /api/v1/model-config", a.protected(a.modelConfig))
+	m.HandleFunc("PUT /api/v1/model-config", a.protected(a.modelConfig))
+	m.HandleFunc("GET /api/v1/research/tasks/{id}/sources/{source}", a.protected(a.sources))
 	m.Handle("GET /", http.FileServer(http.Dir(env("WEB_DIR", "web/dist"))))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
-			if r.Method == http.MethodPost {
+			if r.Method == http.MethodPost || r.Method == http.MethodPut {
 				origin := r.Header.Get("Origin")
 				if (origin != "" && origin != a.origin) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 					problem(w, 403, "origin_forbidden")
@@ -218,19 +222,22 @@ func (a *apiServer) logout(w http.ResponseWriter, r *http.Request, _ string) {
 }
 
 type snapshot struct {
-	ID     string  `json:"task_id"`
-	Goal   string  `json:"goal"`
-	Status string  `json:"status"`
-	Phase  *string `json:"phase"`
-	Seq    uint64  `json:"event_seq,string"`
-	Error  *string `json:"error_code,omitempty"`
+	ID             string  `json:"task_id"`
+	Goal           string  `json:"goal"`
+	Status         string  `json:"status"`
+	Phase          *string `json:"phase"`
+	Seq            uint64  `json:"event_seq,string"`
+	Error          *string `json:"error_code,omitempty"`
+	TokensUsed     uint32  `json:"tokens_used"`
+	TokensReserved uint32  `json:"tokens_reserved"`
+	TokenLimit     uint32  `json:"token_limit"`
 }
 
-const taskColumns = "id,goal,status,phase,event_seq,error_code"
+const taskColumns = "id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit"
 
 func (a *apiServer) readTask(ctx context.Context, tenant, id string) (s snapshot, err error) {
 	err = a.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM research_tasks WHERE tenant_id=? AND id=?", tenant, id).
-		Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error)
+		Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error, &s.TokensUsed, &s.TokensReserved, &s.TokenLimit)
 	return s, err
 }
 
@@ -255,9 +262,20 @@ func (a *apiServer) createTask(w http.ResponseWriter, r *http.Request, tenant st
 	defer tx.Rollback()
 
 	id := identifier(16)
-	if _, err = tx.ExecContext(ctx, "INSERT INTO research_tasks(id,tenant_id,goal,status,deadline_at,event_seq) VALUES(?,?,?,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1)", id, tenant, input.Goal); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO research_tasks(id,tenant_id,goal,status,deadline_at,event_seq,runtime_version) VALUES(?,?,?,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.1')", id, tenant, input.Goal); err != nil {
 		internal(w, err)
 		return
+	}
+	var modelVersion uint32
+	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM model_configs WHERE tenant_id=?", tenant).Scan(&modelVersion); err != nil {
+		internal(w, err)
+		return
+	}
+	if modelVersion > 0 {
+		if _, err = tx.ExecContext(ctx, "UPDATE research_tasks SET model_version=? WHERE tenant_id=? AND id=?", modelVersion, tenant, id); err != nil {
+			internal(w, err)
+			return
+		}
 	}
 	_, err = tx.ExecContext(ctx, "INSERT INTO request_keys VALUES(?,?,?,?)", tenant, kd[:], rd[:], id)
 	if duplicate(err) {
@@ -308,7 +326,7 @@ func (a *apiServer) listTasks(w http.ResponseWriter, r *http.Request, tenant str
 	tasks := make([]snapshot, 0)
 	for rows.Next() {
 		var s snapshot
-		if err = rows.Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error); err != nil {
+		if err = rows.Scan(&s.ID, &s.Goal, &s.Status, &s.Phase, &s.Seq, &s.Error, &s.TokensUsed, &s.TokensReserved, &s.TokenLimit); err != nil {
 			internal(w, err)
 			return
 		}
@@ -345,11 +363,11 @@ func (a *apiServer) report(w http.ResponseWriter, r *http.Request, tenant string
 		internal(w, err)
 		return
 	}
-	if s.Status == "FAILED" {
+	if s.Status == "FAILED" || s.Status == "CANCELLED" {
 		problem(w, 404, "report_unavailable")
 		return
 	}
-	if s.Status != "SUCCEEDED" {
+	if s.Status != "SUCCEEDED" && s.Status != "PARTIAL" {
 		problem(w, 409, "report_not_ready")
 		return
 	}

@@ -2,3 +2,8 @@ web/node_modules/
 web/dist/
 .cache/
 *.exe
+.env
+.env.*
+!.env.example
+core
+core.*

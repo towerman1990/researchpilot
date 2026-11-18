@@ -10,3 +10,5 @@
 6. [API 与 SSE](05-API-DESIGN.md)
 7. [技术选型、ADR 与待决项](06-TECH-STACK-DECISIONS.md)
 8. [路线图、部署与验收](07-ROADMAP.md)
+9. [M2 研究与恢复详细设计](08-M2-DESIGN.md)
+10. [M2 开发进度与本地验证](09-M2-IMPLEMENTATION.md)

@@ -38,10 +38,13 @@ Assert-HttpStatus { Invoke-RestMethod "$taskUrl/report" -WebSession $other } 404
 Assert-HttpStatus { Invoke-RestMethod "$taskUrl/events" -WebSession $other } 404
 $events = Invoke-WebRequest "$taskUrl/events?after=0" -WebSession $owner -TimeoutSec 60
 $eventIds = [regex]::Matches($events.Content, '(?m)^id: (\d+)\r?$') | ForEach-Object { $_.Groups[1].Value }
-if (($eventIds -join ',') -ne '1,2,3,4') { throw "Unexpected SSE event IDs: $eventIds" }
+if ($eventIds.Count -lt 4) { throw "Missing SSE events: $eventIds" }
+for ($i=0;$i -lt $eventIds.Count;$i++) {
+    if ([long]$eventIds[$i] -ne $i+1) { throw "SSE event sequence is not contiguous: $eventIds" }
+}
 if ($events.Content -notmatch '(?m)^event: report_ready') { throw 'Missing report_ready event.' }
 $tail = Invoke-WebRequest "$taskUrl/events?after=0" -Headers @{'Last-Event-ID'='2'} -WebSession $owner -TimeoutSec 10
-if ($tail.Content -match '(?m)^id: [12]\r?$' -or $tail.Content -notmatch '(?m)^id: 4\r?$') { throw 'SSE resume cursor failed.' }
+if ($tail.Content -match '(?m)^id: [12]\r?$' -or $tail.Content -notmatch '(?m)^event: report_ready') { throw 'SSE resume cursor failed.' }
 
 $task = Invoke-RestMethod $taskUrl -WebSession $owner
 $report = Invoke-RestMethod "$taskUrl/report" -WebSession $owner
