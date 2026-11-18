@@ -5,5 +5,22 @@ web/dist/
 .env
 .env.*
 !.env.example
+# Local credentials and private key material
+.[Ss][Ee][Cc][Rr][Ee][Tt][Ss]/
+[Ss][Ee][Cc][Rr][Ee][Tt][Ss]/
+.[Tt][Oo][Kk][Ee][Nn][Ss]/
+[Tt][Oo][Kk][Ee][Nn][Ss]/
+[Ss][Ee][Cc][Rr][Ee][Tt]
+[Ss][Ee][Cc][Rr][Ee][Tt].*
+[Ss][Ee][Cc][Rr][Ee][Tt][Ss].*
+[Tt][Oo][Kk][Ee][Nn]
+[Tt][Oo][Kk][Ee][Nn].*
+[Tt][Oo][Kk][Ee][Nn][Ss].*
+credentials.local.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.kdbx
 core
 core.*
