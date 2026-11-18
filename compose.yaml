@@ -40,10 +40,13 @@ services:
       PUBLIC_ORIGIN: http://localhost:8080
       MODEL_MASTER_KEY_FILE: /run/secrets/model_master_key
       MODEL_PROXY_URL: ${MODEL_PROXY_URL:-}
+      OUTBOUND_DOH_URL: ${OUTBOUND_DOH_URL:-}
       BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+      GITHUB_READ_TOKEN: ${GITHUB_READ_TOKEN:-}
     secrets: [model_master_key]
     depends_on:
       migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
     ports: ["127.0.0.1:8080:8080"]
   worker:
     build: .
