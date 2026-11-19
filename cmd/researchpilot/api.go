@@ -309,15 +309,60 @@ func (a *apiServer) createTask(w http.ResponseWriter, r *http.Request, tenant st
 	}
 	defer tx.Rollback()
 
+	// Serialize submissions and model changes for this user; resolve idempotent
+	// replays before allocating another trial.
+	var lockedUser string
+	if err = tx.QueryRowContext(ctx, "SELECT id FROM users WHERE id=? FOR UPDATE", tenant).Scan(&lockedUser); err != nil {
+		internal(w, err)
+		return
+	}
+	var previousDigest []byte
+	var previousID string
+	err = tx.QueryRowContext(ctx, "SELECT request_digest,task_id FROM request_keys WHERE tenant_id=? AND key_digest=?", tenant, kd[:]).Scan(&previousDigest, &previousID)
+	if err == nil {
+		if string(previousDigest) != string(rd[:]) {
+			problem(w, 409, "idempotency_conflict")
+			return
+		}
+		_ = tx.Rollback()
+		s, readErr := a.readTask(ctx, tenant, previousID)
+		if readErr != nil {
+			internal(w, readErr)
+			return
+		}
+		w.Header().Set("Location", "/api/v1/research/tasks/"+previousID)
+		reply(w, 202, s)
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		internal(w, err)
+		return
+	}
+
 	id := identifier(16)
 	if _, err = tx.ExecContext(ctx, "INSERT INTO research_tasks(id,tenant_id,goal,status,deadline_at,event_seq,runtime_version) VALUES(?,?,?,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2')", id, tenant, input.Goal); err != nil {
 		internal(w, err)
 		return
 	}
 	var modelVersion uint32
-	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM model_configs WHERE tenant_id=?", tenant).Scan(&modelVersion); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM model_configs WHERE tenant_id=? AND is_trial=false AND revoked=false", tenant).Scan(&modelVersion); err != nil {
 		internal(w, err)
 		return
+	}
+	if modelVersion == 0 && trialEnabled() {
+		modelVersion, err = createTrialModel(ctx, tx, tenant, id)
+		if err != nil {
+			if err.Error() == "trial_exhausted" {
+				problem(w, 409, "trial_exhausted")
+				return
+			}
+			if err.Error() == "trial_unavailable" {
+				problem(w, 503, "trial_unavailable")
+				return
+			}
+			internal(w, err)
+			return
+		}
 	}
 	if modelVersion > 0 {
 		var revoked bool

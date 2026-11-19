@@ -11,3 +11,5 @@ web/dist
 secrets
 .tokens
 tokens
+deploy/.env
+deploy/.env.*

@@ -104,20 +104,29 @@ func loadModel(ctx context.Context, db modelReader, tenant string, version uint3
 
 func (a *apiServer) modelConfig(w http.ResponseWriter, r *http.Request, tenant string) {
 	if r.Method == "GET" {
+		var used int
+		if err := a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM trial_usage WHERE tenant_id=?", tenant).Scan(&used); err != nil {
+			internal(w, err)
+			return
+		}
+		remaining := trialLimit - used
+		if remaining < 0 {
+			remaining = 0
+		}
 		var version uint32
 		var base, model, tail string
 		var revoked bool
-		err := a.db.QueryRowContext(r.Context(), "SELECT version,base_url,model,key_tail,revoked FROM model_configs WHERE tenant_id=? ORDER BY version DESC LIMIT 1", tenant).
+		err := a.db.QueryRowContext(r.Context(), "SELECT version,base_url,model,key_tail,revoked FROM model_configs WHERE tenant_id=? AND is_trial=false ORDER BY version DESC LIMIT 1", tenant).
 			Scan(&version, &base, &model, &tail, &revoked)
 		if errors.Is(err, sql.ErrNoRows) {
-			reply(w, 200, map[string]bool{"configured": false})
+			reply(w, 200, map[string]any{"configured": false, "trial_enabled": trialEnabled(), "trial_remaining": remaining, "trial_limit": trialLimit})
 			return
 		}
 		if err != nil {
 			internal(w, err)
 			return
 		}
-		reply(w, 200, map[string]any{"configured": !revoked, "revoked": revoked, "version": version, "base_url": base, "model": model, "key_tail": tail})
+		reply(w, 200, map[string]any{"configured": !revoked, "revoked": revoked, "version": version, "base_url": base, "model": model, "key_tail": tail, "trial_enabled": trialEnabled(), "trial_remaining": remaining, "trial_limit": trialLimit})
 		return
 	}
 	var input struct {
@@ -175,7 +184,12 @@ func (a *apiServer) modelConfig(w http.ResponseWriter, r *http.Request, tenant s
 			problem(w, 422, "api_key_required")
 			return
 		}
-		previous, loadErr := loadModel(r.Context(), tx, tenant, version-1)
+		var previousVersion uint32
+		if err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(MAX(version),0) FROM model_configs WHERE tenant_id=? AND is_trial=false AND revoked=false", tenant).Scan(&previousVersion); err != nil || previousVersion == 0 {
+			problem(w, 409, "model_key_unavailable")
+			return
+		}
+		previous, loadErr := loadModel(r.Context(), tx, tenant, previousVersion)
 		if loadErr != nil {
 			problem(w, 409, "model_key_unavailable")
 			return

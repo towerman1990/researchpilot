@@ -13,4 +13,4 @@ ResearchPilot 是技术研究工作台。用户提交研究目标，系统规划
 
 本地启动与开发依赖见 [README](../README.md)。更新已有数据库前参考 [M2 实施记录](../docs/09-M2-IMPLEMENTATION.md)。各设备自行配置本地凭据和数据库。需要解密既有模型配置时，须通过受控渠道保管对应的模型主密钥。
 
-TODO 确认桌面壳选型与发布方式。桌面交付安排见 [路线图](../docs/07-ROADMAP.md)。
+M3 已创建 MyGo v0.10.0 的 Windows amd64 原型和 NSIS 安装包，桌面壳仍属候选，ADR 005 待真实安装与同用例验收。详见 [桌面原型记录](../docs/13-M3-DESKTOP.md) 和 [路线图](../docs/07-ROADMAP.md)。

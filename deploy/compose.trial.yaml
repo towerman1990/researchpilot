@@ -1,0 +1,14 @@
+# 试用密钥通过宿主机私有文件挂载到 API，不写入镜像或仓库。
+services:
+  api:
+    environment:
+      TRIAL_MODEL_ENABLED: "true"
+      TRIAL_MODEL_BASE_URL: ${TRIAL_MODEL_BASE_URL:-https://api.deepseek.com}
+      TRIAL_MODEL_NAME: ${TRIAL_MODEL_NAME:-deepseek-flash}
+      TRIAL_MODEL_API_KEY_FILE: /run/secrets/trial_model_api_key
+    secrets:
+      - model_master_key
+      - trial_model_api_key
+secrets:
+  trial_model_api_key:
+    file: ${TRIAL_MODEL_API_KEY_PATH:?set TRIAL_MODEL_API_KEY_PATH}

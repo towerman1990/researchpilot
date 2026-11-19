@@ -5,6 +5,13 @@ import {applyTaskEvent, mergeEvent, terminal} from './events.js';
 
 const labels = {QUEUED:'等待派发',RUNNING:'执行中',RETRY_WAIT:'等待重试',CANCELLING:'取消中',CANCELLED:'已取消',PARTIAL:'部分完成',SUCCEEDED:'已完成',FAILED:'执行失败'};
 const path = '/api/v1/research/tasks';
+function newRequestID() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
 const errors = {
   invalid_credentials:'请检查邮箱和密码。注册密码至少需要 10 字节。',
   registration_conflict:'这个邮箱已注册，请直接登录。',
@@ -20,6 +27,8 @@ const errors = {
   model_http_403:'模型服务拒绝访问，请检查账号权限。',
   model_http_429:'模型服务限流，请稍后重试。',
   rate_limited:'请求过于频繁，请稍后重试。',
+  trial_exhausted:'免费试用次数已用完，请在模型设置中配置自己的 API Key。',
+  trial_unavailable:'免费试用服务暂不可用，请稍后重试或配置自己的 API Key。',
   model_configuration_revoked:'模型密钥已撤销，请重新配置。',
   authentication_required:'会话已过期，请重新登录。',
 };
@@ -66,11 +75,11 @@ function App() {
   }, [user]);
 
   useEffect(() => {
-    if (!user || !settings) return;
+    if (!user) return;
     let active=true;
     api('/api/v1/model-config').then(value=>{if(active)setModelInfo(value);},e=>{if(active)setError(e.message);});
     return ()=>{active=false;};
-  },[user,settings]);
+  },[user,settings,selected]);
 
   async function saveModel(event) {
     event.preventDefault();
@@ -174,7 +183,7 @@ function App() {
     event.preventDefault();
     setBusy(true); setError('');
     const value = goal.trim();
-    if (requestKey.current?.goal !== value) requestKey.current = {goal:value,id:crypto.randomUUID()};
+    if (requestKey.current?.goal !== value) requestKey.current = {goal:value,id:newRequestID()};
     try {
       const created = await api(path,{goal:value},{'Idempotency-Key':requestKey.current.id});
       select(created.task_id);
@@ -248,6 +257,7 @@ function App() {
       {error && <p className="error" role="alert">{error}</p>}
       {settings ? (!modelInfo ? <p role="status">正在加载模型设置</p> : <form onSubmit={saveModel}>
         <h1>模型设置</h1>
+        {modelInfo?.trial_enabled && <p>免费试用剩余 {modelInfo.trial_remaining} / {modelInfo.trial_limit} 次。使用自己的 API Key 不消耗试用次数。</p>}
         {modelInfo?.configured && <p>已配置 {modelInfo.model}，密钥尾号 {modelInfo.key_tail}</p>}
         <label>Base URL<input name="base_url" type="url" defaultValue={modelInfo?.base_url || 'https://api.deepseek.com'} required/></label>
         <label>模型名称<input name="model" defaultValue={modelInfo?.model || 'deepseek-flash'} required/></label>
@@ -263,7 +273,7 @@ function App() {
         <h1>新建研究</h1>
         <label>研究目标<textarea value={goal} onChange={event=>setGoal(event.target.value)}
           maxLength={2000} rows={5} placeholder="例如：比较 Gin 和 Hertz 的 SSE 集成方式" required/></label>
-        <p className="muted">配置模型后可研究公开网页和 GitHub 仓库；尚未配置时运行演示任务。</p>
+        <p className="muted">{modelInfo?.configured ? "当前使用自己的模型配置。" : modelInfo?.trial_enabled ? `免费试用剩余 ${modelInfo.trial_remaining} / ${modelInfo.trial_limit} 次；用完后请配置自己的 API Key。` : "配置模型后可研究公开网页和 GitHub 仓库；尚未配置时运行演示任务。"}</p>
         <button disabled={busy || !goal.trim()}>开始研究</button>
       </form> : <>
         <header><h1>{task?.goal || '研究任务'}</h1><span className="status" role="status">{labels[task?.status] || '正在加载'}</span></header>

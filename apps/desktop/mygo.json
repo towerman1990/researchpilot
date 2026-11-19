@@ -1,0 +1,10 @@
+{
+  "name": "ResearchPilot",
+  "slug": "researchpilot",
+  "identifier": "cn.towerman1990.researchpilot",
+  "version": "0.1.0",
+  "copyright": "© 2026 ResearchPilot contributors",
+  "publisher": "ResearchPilot contributors",
+  "main": ".",
+  "out": "build"
+}

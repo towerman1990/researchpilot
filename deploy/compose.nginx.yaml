@@ -1,0 +1,5 @@
+# 现有 Nginx 已占用 80/443 时使用：仅暴露到服务器回环地址。
+services:
+  proxy:
+    ports: !override
+      - "127.0.0.1:18080:80"

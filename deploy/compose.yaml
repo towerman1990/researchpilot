@@ -1,0 +1,84 @@
+name: researchpilot-production
+x-app-env: &app-env
+  MYSQL_DSN: rp:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@tcp(mysql:3306)/researchpilot
+  REDIS_ADDR: redis:6379
+  PUBLIC_ORIGIN: ${RESEARCHPILOT_SCHEME:-https}://${RESEARCHPILOT_DOMAIN:?set RESEARCHPILOT_DOMAIN}
+  MODEL_MASTER_KEY_FILE: /run/secrets/model_master_key
+  MODEL_ALLOWED_HOSTS: ${MODEL_ALLOWED_HOSTS:-api.deepseek.com,api.openai.com}
+  BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+  GITHUB_READ_TOKEN: ${GITHUB_READ_TOKEN:-}
+x-app: &app
+  image: ${RESEARCHPILOT_IMAGE:?set RESEARCHPILOT_IMAGE}
+  environment: *app-env
+  secrets: [model_master_key]
+  networks: [app, data]
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: researchpilot
+      MYSQL_USER: rp
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+    volumes: [mysql:/var/lib/mysql]
+    networks: [data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=tcp -h127.0.0.1 -urp researchpilot -e 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis:/data]
+    networks: [data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    <<: *app
+    command: [migrate]
+    depends_on:
+      mysql: { condition: service_healthy }
+  api:
+    <<: *app
+    command: [api]
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+  worker:
+    <<: *app
+    command: [worker]
+    restart: unless-stopped
+    stop_grace_period: 20s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      RESEARCHPILOT_SITE_ADDRESS: ${RESEARCHPILOT_SCHEME:-https}://${RESEARCHPILOT_DOMAIN:?set RESEARCHPILOT_DOMAIN}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [app]
+    restart: unless-stopped
+networks:
+  app:
+  data:
+    internal: true
+volumes:
+  mysql:
+  redis:
+  caddy-data:
+  caddy-config:
+secrets:
+  model_master_key:
+    file: ${MODEL_MASTER_KEY_PATH:?set MODEL_MASTER_KEY_PATH}

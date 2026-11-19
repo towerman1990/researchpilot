@@ -47,7 +47,7 @@ func evaluate(ctx context.Context, db *sql.DB) error {
 	}
 	tenant := os.Getenv("EVAL_TENANT_ID")
 	if tenant == "" {
-		rows, err := db.QueryContext(ctx, "SELECT DISTINCT tenant_id FROM model_configs m WHERE revoked=false AND version=(SELECT MAX(version) FROM model_configs n WHERE n.tenant_id=m.tenant_id)")
+		rows, err := db.QueryContext(ctx, "SELECT DISTINCT tenant_id FROM model_configs m WHERE revoked=false AND is_trial=false AND version=(SELECT MAX(version) FROM model_configs n WHERE n.tenant_id=m.tenant_id AND n.is_trial=false)")
 		if err != nil {
 			return err
 		}
@@ -71,7 +71,7 @@ func evaluate(ctx context.Context, db *sql.DB) error {
 		tenant = tenants[0]
 	}
 	var version uint32
-	if err := db.QueryRowContext(ctx, "SELECT MAX(version) FROM model_configs WHERE tenant_id=?", tenant).Scan(&version); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT MAX(version) FROM model_configs WHERE tenant_id=? AND is_trial=false AND revoked=false", tenant).Scan(&version); err != nil {
 		return errors.New("evaluation model not configured")
 	}
 	config, err := loadModel(ctx, db, tenant, version)

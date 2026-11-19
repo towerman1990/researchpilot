@@ -24,7 +24,7 @@ func (a *apiServer) revokeModel(w http.ResponseWriter, r *http.Request, tenant s
 		internal(w, err)
 		return
 	}
-	if _, err = tx.ExecContext(r.Context(), "UPDATE model_configs SET revoked=true WHERE tenant_id=?", tenant); err != nil {
+	if _, err = tx.ExecContext(r.Context(), "UPDATE model_configs SET revoked=true WHERE tenant_id=? AND is_trial=false", tenant); err != nil {
 		internal(w, err)
 		return
 	}
@@ -40,7 +40,7 @@ func (a *apiServer) probeModel(w http.ResponseWriter, r *http.Request, tenant st
 		return
 	}
 	var version uint32
-	if err := a.db.QueryRowContext(r.Context(), "SELECT version FROM model_configs WHERE tenant_id=? AND revoked=false ORDER BY version DESC LIMIT 1", tenant).Scan(&version); err != nil {
+	if err := a.db.QueryRowContext(r.Context(), "SELECT version FROM model_configs WHERE tenant_id=? AND revoked=false AND is_trial=false ORDER BY version DESC LIMIT 1", tenant).Scan(&version); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 409, "model_not_configured")
 		} else {

@@ -24,3 +24,7 @@ credentials.local.*
 *.kdbx
 core
 core.*
+
+# MyGo desktop build outputs
+apps/desktop/build/
+apps/desktop/.mygo/

@@ -55,7 +55,7 @@ func run(mode string) error {
 		return migrate(ctx, db, env("MIGRATIONS_DIR", "migrations"))
 	}
 	var schemaReady bool
-	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='006_model_failure_reason.sql' AND dirty=false)").Scan(&schemaReady); err != nil || !schemaReady {
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='007_trial.sql' AND dirty=false)").Scan(&schemaReady); err != nil || !schemaReady {
 		return errors.New("M2 schema missing; run researchpilot migrate before starting API or worker")
 	}
 	if mode == "evaluate" {
