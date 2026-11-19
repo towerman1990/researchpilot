@@ -68,3 +68,8 @@ M1 已完成。M2 工程收尾、最终整组真实评估和助手关键证据�
 - 服务器已部署 researchpilot-local:trial-v1，迁移 007 完成。迁移前数据库备份位于服务器受限目录 /opt/researchpilot/backups/before-trial-v1.sql.gz，原镜像和原 env 备份保留。
 - HTTPS 独立验收账号初始显示 10 次，真实提交后剩余 9 次；使用服务器 DeepSeek 密钥的官方 Go 文档研究任务成功并取得报告。第 10/11 次边界、并发及个人密钥优先已在本地独立 MySQL 测试；未在生产批量消耗额度。
 - 服务器构建使用 GOMAXPROCS=1、Go -p 1，以降低 2 GiB 内存机器的构建压力。试用密钥和模型主密钥都留在服务器受限目录，不提交仓库。
+
+## macOS 与 Linux 文档
+
+- 增加 macOS / Linux Docker Compose 使用指南和 POSIX shell 密钥初始化脚本。脚本保留已有主密钥；Docker 容器使用非 root UID，需要密钥文件可读且宿主机目录受限。
+- macOS 与 Linux ARM64 仅提供架构说明，未在实际设备验证；生产镜像发布目前为 linux/amd64。

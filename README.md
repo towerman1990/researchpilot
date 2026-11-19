@@ -4,7 +4,7 @@ ResearchPilot 是一个本地技术研究工作台。你可以注册、登录、
 
 ## 启动
 
-需要 PowerShell 7、Docker 和 Compose v2。在仓库根目录运行以下命令。升级已有数据库前先备份 MySQL。
+Windows 用户需要 PowerShell 7、Docker 和 Compose。在仓库根目录运行以下命令。升级已有数据库前先备份 MySQL。macOS 和 Linux 用户请参阅 [macOS / Linux 部署指南](docs/14-MACOS-LINUX.md)，无需安装 PowerShell 即可启动。
 
 ```powershell
 pwsh -File ./scripts/init-local.ps1

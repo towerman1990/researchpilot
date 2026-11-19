@@ -18,3 +18,4 @@
 - [M2 真实评估与证据复核](11-M2-EVALUATION.md)
 - [M3 Web 上线与发布](12-M3-RELEASE.md)
 - [M4 MyGo Windows 桌面原型](13-M3-DESKTOP.md)
+- [macOS 和 Linux 部署指南](14-MACOS-LINUX.md)
