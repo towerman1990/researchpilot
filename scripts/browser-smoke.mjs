@@ -45,7 +45,7 @@ async function setInput(selector,value){
 }
 try{
   let port;
-  for(let i=0;i<100;i++){
+  for(let i=0;i<600;i++){
     if(spawnError)throw spawnError;
     try{port=Number((await readFile(path.join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0]);if(port)break;}catch{}
     await wait(100);
