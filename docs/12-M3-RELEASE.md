@@ -83,11 +83,18 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.n
 
 ## 2026-11-19 恢复演练
 
-在隔离的源 MySQL 中创建测试报告、加密模型配置和已派发待恢复任务，压缩备份后导入另一个新 MySQL。以对应测试主密钥成功解密模型配置，确认报告内容；使用全新空 Redis，通过任务恢复与 Outbox 转发确认新的派发代次进入队列。该演练未导入生产数据，也未验证目标队列中任务的完整消费与业务执行；生产恢复切换仍需按具体窗口演练。
+在隔离的源 MySQL 中创建测试报告、加密模型配置和已派发待恢复任务，压缩备份后导入另一个新 MySQL。以对应测试主密钥成功解密模型配置，确认报告内容；使用全新空 Redis，通过任务恢复与 Outbox 转发确认新的派发代次进入队列。随后以独立 Worker 从目标 Redis 消费恢复任务，完成演示任务并生成报告。该演练未导入生产数据，也未调用真实模型；生产恢复切换仍需按具体窗口演练。
 
 ## 2026-11-19 固定镜像发布与回退演练
 
-- GitHub Actions 发布了提交 `bcbcad04adc2e42dcad67c7e64cbe1555d953a6f` 对应镜像。线上使用 `ghcr.io/towerman1990/researchpilot@sha256:c7e24aae56fa45b28e7031b750fc6fcf7dac4755e3973604d1decc722a719d96`。
+- GitHub Actions 发布了提交 `bcbcad04adc2e42dcad67c7e64cbe1555d953a6f` 对应镜像。该次发布使用 `ghcr.io/towerman1990/researchpilot@sha256:c7e24aae56fa45b28e7031b750fc6fcf7dac4755e3973604d1decc722a719d96`；随后已更新为下方的可信代理版本。
 - 发布前备份：服务器 `/opt/researchpilot/backups/before-ghcr-bcbcad0.sql.gz`；主密钥需单独保管。部署后独立账号通过 HTTPS 注册、登录、默认试用、真实研究、SSE 和报告检查。
 - 短暂切换回原 `researchpilot-local:trial-v1`，等待启动后 HTTPS 健康检查通过；随后自动切回 GHCR 固定镜像，确认 API、Worker、MySQL、Redis 正常。该回退演练仅检查服务健康，未在旧镜像重新执行完整研究，也未执行数据库回退。
-- 可信代理来源识别已在代码中实现，生产发布和线上限流行为仍待验证。已模拟关闭 SSE 连接后携带 Last-Event-ID 重新连接并收到完整报告；浏览器自动重连和生产数据库恢复切换尚未演练。
+- 可信代理来源识别已部署；线上验证两个伪造转发地址被计入同一个真实来源额度。已模拟关闭 SSE 连接后携带 Last-Event-ID 重新连接并收到完整报告；浏览器自动重连和生产数据库恢复切换尚未演练。
+
+## 2026-11-19 可信代理版本发布
+
+- 提交 `743b4ff866919bbba01ed0f85f9d1594e65c6972` 的 CI 三项通过，镜像发布成功；线上使用 `ghcr.io/towerman1990/researchpilot@sha256:d11e3c65d44e6170f11ce0e83a93921d47b6e1446b93bb518b916dc077bb1d0f`。
+- 切换前备份服务器数据库 `/opt/researchpilot/backups/before-proxy-743b4ff.sql.gz`，旧镜像与配置保存在 `/opt/researchpilot/releases/before-proxy-743b4ff/`。
+- 线上两次伪造转发 IP 的登录请求计入同一个来源额度；隔离代理测试验证请求头被覆盖。新版本独立账号通过 HTTPS 登录、试用额度、真实研究、SSE 和报告检查。
+- 账号试用次数不阻止重复注册；浏览器自动 SSE 重连、生产数据恢复切换及旧镜像完整研究回退仍需在受控窗口演练。隔离恢复演练已验证报告、加密模型配置、任务重新入队及 Worker 完成演示任务。
