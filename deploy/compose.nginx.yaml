@@ -1,5 +1,6 @@
-# 现有 Nginx 已占用 80/443 时使用：仅暴露到服务器回环地址。
+# 现有 Nginx 已占用 80/443 时使用：HTTP 供现有 Nginx 转发，HTTPS 由 Caddy 直接处理。
 services:
   proxy:
     ports: !override
       - "127.0.0.1:18080:80"
+      - "443:443"

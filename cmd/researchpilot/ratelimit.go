@@ -53,11 +53,52 @@ func (a *apiServer) allow(w http.ResponseWriter, r *http.Request, operation, sub
 	return true
 }
 func clientAddress(r *http.Request) string {
-	// X-Forwarded-For is intentionally ignored until a trusted proxy list is configured.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
-	return host
+	proxyHost := strings.TrimSpace(os.Getenv("TRUSTED_PROXY_HOST"))
+	if proxyHost == "" {
+		return host
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, proxyHost)
+	if err != nil {
+		return host
+	}
+	trusted := make([]net.IP, 0, len(addresses))
+	for _, address := range addresses {
+		trusted = append(trusted, address.IP)
+	}
+	return forwardedClientAddress(r, host, trusted)
+}
+
+// Only the configured immediate proxy may supply a single client address.
+// The proxy must replace untrusted forwarding headers rather than append them.
+func forwardedClientAddress(r *http.Request, peer string, trusted []net.IP) string {
+	peerIP := net.ParseIP(peer)
+	if peerIP == nil {
+		return peer
+	}
+	isTrusted := false
+	for _, ip := range trusted {
+		if ip.Equal(peerIP) {
+			isTrusted = true
+			break
+		}
+	}
+	if !isTrusted {
+		return peer
+	}
+	values := r.Header.Values("X-Forwarded-For")
+	if len(values) != 1 || strings.Contains(values[0], ",") {
+		return peer
+	}
+	client := net.ParseIP(strings.TrimSpace(values[0]))
+	if client == nil {
+		return peer
+	}
+	return client.String()
 }
 func accountSubject(email string) string { return strings.ToLower(strings.TrimSpace(email)) }

@@ -1,6 +1,6 @@
 # M3 Web 上线与发布
 
-M3 以已通过 CI 的 M2 提交 `7168d00` 为起点。首发目标是在腾讯云运行 Web 服务。Windows 桌面客户端与桌面壳选型移至 M4。当前先以 HTTP 做受限部署验证，正式发布前启用 HTTPS。
+M3 以已通过 CI 的 M2 提交 `7168d00` 为起点。首发目标是在腾讯云运行 Web 服务。Windows 桌面客户端与桌面壳选型移至 M4。首发环境已启用 HTTPS；HTTP 仅用于受限联调。
 
 | 交付 | 放行条件 |
 | --- | --- |
@@ -28,7 +28,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml ps -a
 curl -fsS "http://researchpilot.towerman1990.cn/healthz"
 ~~~
 
-验收时用独立账号检查注册登录、任务、断线重连和引用报告。登录来源限流目前使用 TCP 对端地址，所有经 Caddy 的请求共享该来源配额。邀请多人使用前，应接入可信反向代理来源识别并复测登录限流。
+验收时用独立账号检查注册登录、任务、断线重连和引用报告。登录来源限流使用可信 Caddy 的转发地址。API 将 TCP 对端与 Compose 的 proxy 主机解析结果比较，仅接受匹配代理传来的单个合法 IP；解析失败或请求头异常时使用 TCP 对端地址。Caddy 必须覆盖客户端传入的 X-Forwarded-For，不得信任未经验证的上游转发头。
 
 ## 临时 HTTP 与 HTTPS 切换
 
@@ -58,7 +58,7 @@ gzip -dc /受限目录/时间戳.sql.gz |
 
 2026-11-18 在独立 Podman Compose 栈使用 Caddy 本地 CA，通过 HTTPS 健康检查、注册登录、任务提交、SSE 完整回放和报告读取。将 MySQL 压缩备份导入另一套新数据卷，核对了同一任务的报告记录。模型配置解密和队列恢复需要另行做完整演练。
 
-用户已更新服务器为腾讯云首尔、amd64、IPv4 43.166.14.25，域名不变。此前 DNS 和 TLS 检查针对旧目标，不能作为新服务器验收结果。当前先验证 HTTP；新目标 DNS、云端运行与发布待核实。镜像发布工作流已配置，尚未运行。
+当前腾讯云首尔 amd64 服务器已部署并启用 HTTPS；宝塔 Nginx 占用 80，代理容器监听 443。本地构建镜像 `researchpilot-local:trial-v1`，独立验收账号已完成真实研究。线上以 HTTPS 验证 SSE 事件序列完整并通过 Last-Event-ID 回放；真实网络断开重连仍需单独检查。模型配置解密、队列恢复和正式镜像回退仍待完整演练。
 
 ## 默认模型试用
 
@@ -68,4 +68,26 @@ gzip -dc /受限目录/时间戳.sql.gz |
 
 启用前确认 MySQL 备份、密钥可供容器 UID 65532 读取和模型出站域名白名单，检查迁移 007 执行情况。使用独立账号验收 10 次额度、第 11 次提示、个人密钥优先和真实模型调用。首次启用需服务器实际提供有效的试用密钥。
 
-2026-11-19 首次试用部署：服务器已执行迁移 007 并启用试用服务。独立验收账号从 10 次降至 9 次，一次基于 Go 官方文档的真实研究成功并生成报告。当前服务器使用本地构建的 trial-v1 镜像；后续应将已验证代码纳入 Git 与 CI，再切换到可追溯的发布镜像。
+2026-11-19 首次试用部署：服务器已执行迁移 007 并启用试用服务。独立验收账号从 10 次降至 9 次，一次基于 Go 官方文档的真实研究成功并生成报告。当前服务器使用本地构建的 trial-v1 镜像；代码已提交并通过 CI，发布镜像工作流和固定 digest 部署仍待执行。
+## 当前服务器的 Compose 命令
+
+当前服务器必须同时使用三个 Compose 文件，才能保留宝塔 Nginx 的端口接入和平台试用密钥：
+
+~~~sh
+cd /opt/researchpilot/source
+docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.nginx.yaml -f deploy/compose.trial.yaml ps -a
+docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.nginx.yaml -f deploy/compose.trial.yaml up -d
+~~~
+
+`deploy/compose.nginx.yaml` 为现有 Nginx 提供本机 HTTP 转发端口，并由 Caddy 直接监听 443。修改任何入口前先核对线上实际配置与端口占用。`backup.sh` 只调用 MySQL，使用基础 Compose 文件，不改变其他容器。
+
+## 2026-11-19 恢复演练
+
+在隔离的源 MySQL 中创建测试报告、加密模型配置和已派发待恢复任务，压缩备份后导入另一个新 MySQL。以对应测试主密钥成功解密模型配置，确认报告内容；使用全新空 Redis，通过任务恢复与 Outbox 转发确认新的派发代次进入队列。该演练未导入生产数据，也未验证目标队列中任务的完整消费与业务执行；生产恢复切换仍需按具体窗口演练。
+
+## 2026-11-19 固定镜像发布与回退演练
+
+- GitHub Actions 发布了提交 `bcbcad04adc2e42dcad67c7e64cbe1555d953a6f` 对应镜像。线上使用 `ghcr.io/towerman1990/researchpilot@sha256:c7e24aae56fa45b28e7031b750fc6fcf7dac4755e3973604d1decc722a719d96`。
+- 发布前备份：服务器 `/opt/researchpilot/backups/before-ghcr-bcbcad0.sql.gz`；主密钥需单独保管。部署后独立账号通过 HTTPS 注册、登录、默认试用、真实研究、SSE 和报告检查。
+- 短暂切换回原 `researchpilot-local:trial-v1`，等待启动后 HTTPS 健康检查通过；随后自动切回 GHCR 固定镜像，确认 API、Worker、MySQL、Redis 正常。该回退演练仅检查服务健康，未在旧镜像重新执行完整研究，也未执行数据库回退。
+- 可信代理来源识别已在代码中实现，生产发布和线上限流行为仍待验证。已模拟关闭 SSE 连接后携带 Last-Event-ID 重新连接并收到完整报告；浏览器自动重连和生产数据库恢复切换尚未演练。

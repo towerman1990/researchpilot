@@ -46,6 +46,9 @@ services:
       mysql: { condition: service_healthy }
   api:
     <<: *app
+    environment:
+      <<: *app-env
+      TRUSTED_PROXY_HOST: proxy
     command: [api]
     restart: unless-stopped
     depends_on:
