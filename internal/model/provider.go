@@ -52,7 +52,26 @@ type Response struct {
 	Tokens    uint32
 	Finish    string
 	RequestID string
+	Breakdown *TokenBreakdown
 }
+type TokenBreakdown struct{ Input, Output uint32 }
+
+type wireUsage struct {
+	Total  int64           `json:"total_tokens"`
+	Input  json.RawMessage `json:"prompt_tokens"`
+	Output json.RawMessage `json:"completion_tokens"`
+}
+
+func (u wireUsage) breakdown() *TokenBreakdown {
+	var input, output *int64
+	if json.Unmarshal(u.Input, &input) != nil || json.Unmarshal(u.Output, &output) != nil ||
+		input == nil || output == nil || *input < 0 || *output < 0 ||
+		*input > u.Total || *output > u.Total || *input+*output != u.Total {
+		return nil
+	}
+	return &TokenBreakdown{Input: uint32(*input), Output: uint32(*output)}
+}
+
 type Event struct{ Text string }
 type Provider interface {
 	Generate(context.Context, Request) (Response, error)
@@ -165,17 +184,16 @@ func (p Compatible) Generate(ctx context.Context, r Request) (Response, error) {
 			} `json:"message"`
 			Finish string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage struct {
-			Total int64 `json:"total_tokens"`
-		} `json:"usage"`
+		Usage wireUsage `json:"usage"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil || len(envelope.Choices) != 1 || envelope.Usage.Total < 0 || envelope.Usage.Total > 1<<31 {
 		return Response{}, errors.New("invalid_model_response")
 	}
 	c := envelope.Choices[0]
-	out := Response{c.Message.Content, c.Message.Calls, uint32(envelope.Usage.Total), c.Finish, res.Header.Get("x-request-id")}
+	out := Response{Text: c.Message.Content, Calls: c.Message.Calls, Tokens: uint32(envelope.Usage.Total),
+		Finish: c.Finish, RequestID: res.Header.Get("x-request-id"), Breakdown: envelope.Usage.breakdown()}
 	if err = validate(out); err != nil {
-		return Response{Tokens: out.Tokens, Finish: out.Finish, RequestID: out.RequestID}, err
+		return Response{Tokens: out.Tokens, Finish: out.Finish, RequestID: out.RequestID, Breakdown: out.Breakdown}, err
 	}
 	return out, nil
 }
@@ -230,9 +248,7 @@ func (p Compatible) Stream(ctx context.Context, r Request, emit func(Event) erro
 				} `json:"delta"`
 				Finish *string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage *struct {
-				Total int64 `json:"total_tokens"`
-			} `json:"usage"`
+			Usage *wireUsage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(data), &part) != nil {
 			return Response{}, errors.New("invalid_model_stream")
@@ -242,6 +258,7 @@ func (p Compatible) Stream(ctx context.Context, r Request, emit func(Event) erro
 				return Response{}, errors.New("invalid_model_usage")
 			}
 			out.Tokens = uint32(part.Usage.Total)
+			out.Breakdown = part.Usage.breakdown()
 		}
 		if len(part.Choices) > 1 {
 			return Response{}, errors.New("invalid_model_choices")

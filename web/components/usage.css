@@ -1,0 +1,85 @@
+.usage-controls {
+  margin-bottom: 18px;
+}
+
+.usage-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.usage-summary .ant-statistic-content {
+  color: #182540;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-table {
+  overflow-x: auto;
+}
+
+.usage-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-table th,
+.usage-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #e8edf5;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.usage-table th:first-child {
+  text-align: left;
+}
+
+.usage-table tbody th {
+  font-weight: 500;
+}
+
+.usage-bar {
+  display: flex;
+  width: 100%;
+  max-width: 140px;
+  height: 4px;
+  margin-top: 5px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #edf1f8;
+}
+
+.usage-bar span:first-child { background: #2354d8; }
+.usage-bar span:last-child { background: #8457c4; }
+
+.usage-note {
+  margin-top: 16px;
+  color: #53627a;
+  font-size: 13px;
+}
+
+.model-cost { margin-top: 16px; }
+
+.model-cost-fields,
+.model-cost-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+  gap: 10px 14px;
+}
+
+.model-cost-fields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-cost-fields .ant-input-number { width: 100%; }
+.model-cost-totals { margin: 16px 0 0; }
+.model-cost-totals dt { color: #53627a; }
+.model-cost-totals dd { margin: 4px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 650px) {
+  .sidebar .side-nav { flex-wrap: wrap; }
+}

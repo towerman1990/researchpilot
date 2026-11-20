@@ -39,6 +39,11 @@ func runWorker(ctx context.Context, deps WorkerComponents) error {
 			return taskservice.PruneEvents(ctx, store)
 		})
 	})
+	jobs.Go(func() {
+		runWorkerJob(ctx, "research schedules", 5*time.Second, 10*time.Second, func(ctx context.Context) error {
+			return taskservice.RunDueSchedules(ctx, store, time.Now())
+		})
+	})
 	log.Printf("worker listening on %s", queue)
 	<-ctx.Done()
 	jobs.Wait()

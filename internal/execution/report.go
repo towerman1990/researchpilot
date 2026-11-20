@@ -123,11 +123,19 @@ func publishPartial(ctx context.Context, tx *repository.ExecutionTx, d delivery,
 }
 
 func finishReport(ctx context.Context, tx *repository.ExecutionTx, d delivery, t taskRow, body, kind string, citations []evidence) error {
+	return saveFinalReport(ctx, tx, d, t, body, kind, "SUCCEEDED", "", citations)
+}
+
+func saveFinalReport(ctx context.Context, tx *repository.ExecutionTx, d delivery, t taskRow, body, kind, status, code string, citations []evidence) error {
 	if err := tx.SaveReport(ctx, d.Tenant, d.Task, body, kind, citations); err != nil {
 		return err
 	}
-	if err := tx.SetTaskFinished(ctx, d.Tenant, d.Task, "SUCCEEDED", ""); err != nil {
+	if err := tx.SetTaskFinished(ctx, d.Tenant, d.Task, status, code); err != nil {
 		return err
 	}
-	return eventUpdate(ctx, tx, d, t, "report_ready", map[string]string{"status": "SUCCEEDED"})
+	payload := map[string]string{"status": status}
+	if code != "" {
+		payload["error_code"] = code
+	}
+	return eventUpdate(ctx, tx, d, t, "report_ready", payload)
 }

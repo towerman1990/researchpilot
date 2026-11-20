@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"researchpilot/internal/common/identity"
+	"researchpilot/internal/common/requestmeta"
 	"researchpilot/internal/common/textutil"
 	"researchpilot/internal/repository"
 )
@@ -39,7 +40,7 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 	}
 	started := time.Now()
 	value, runErr := run(context.WithValue(ctx, modelCallKey{}, key))
-	slog.Info("execution_step", "task_id", e.Task, "trace_id", e.Task, "step", key, "attempt", attempt, "elapsed_ms", time.Since(started).Milliseconds(), "ok", runErr == nil)
+	slog.Info("execution_step", "logid", requestmeta.LogID(ctx), "task_id", e.Task, "trace_id", e.Task, "step", key, "attempt", attempt, "elapsed_ms", time.Since(started).Milliseconds(), "ok", runErr == nil)
 	if runErr != nil {
 		return "", runErr
 	}

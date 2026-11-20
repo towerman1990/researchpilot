@@ -14,6 +14,7 @@ import (
 // Serve starts Hertz and cancels active requests during shutdown.
 func Serve(ctx context.Context, address string, register func(route.IRouter)) error {
 	h := server.New(server.WithHostPorts(address), server.WithReadTimeout(5*time.Second))
+	h.Use(AccessLog)
 	h.Use(func(requestCtx context.Context, c *app.RequestContext) {
 		requestCtx, cancel := context.WithCancel(requestCtx)
 		defer cancel()

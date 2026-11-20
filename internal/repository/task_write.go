@@ -7,8 +7,8 @@ import (
 	"researchpilot/internal/repository/model"
 )
 
-func (t WriteTx) AddTask(tenant, id, goal, parentID string, review, snapshotPreferences bool) error {
-	return t.tasks.AddTask(tenant, id, goal, parentID, review, snapshotPreferences)
+func (t WriteTx) AddTask(tenant, id, goal, parentID, creationLogID string, reviewPlan, reviewCitations, snapshotPreferences bool) error {
+	return t.tasks.AddTask(tenant, id, goal, parentID, creationLogID, reviewPlan, reviewCitations, snapshotPreferences)
 }
 func (t WriteTx) CanFollowUp(tenant, id string) (bool, error) {
 	return requireOne(t.tasks.CanFollowUp(tenant, id))

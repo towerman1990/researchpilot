@@ -1,0 +1,53 @@
+.task-overview {
+  display: grid;
+  gap: 16px;
+}
+
+.task-overview-heading,
+.task-overview-meta,
+.task-overview-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-overview-heading,
+.task-overview-meta {
+  justify-content: space-between;
+}
+
+.task-overview-heading h1 {
+  margin: 0;
+  font-size: clamp(21px, 3vw, 30px);
+}
+
+.task-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.task-overview-group .ant-card-extra,
+.task-overview-status,
+.task-overview-meta {
+  color: #53627a;
+  font-size: 12px;
+}
+
+.task-overview-group ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.task-overview-group li {
+  padding: 12px 0;
+  border-bottom: 1px solid #e8edf5;
+  overflow-wrap: anywhere;
+}
+
+.task-overview-group li:first-child { padding-top: 0; }
+.task-overview-group li:last-child { padding-bottom: 0; border-bottom: 0; }
+.task-overview-group li p { margin: 8px 0; line-height: 1.5; }
+.task-overview-meta .ant-btn { padding-inline: 0; }

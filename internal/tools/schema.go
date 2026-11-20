@@ -26,6 +26,22 @@ func (e *Error) Error() string { return e.Code }
 
 var repositoryPart = regexp.MustCompile("^[A-Za-z0-9_.-]{1,100}$")
 
+// MicrosoftDocsQuery maps approved topic IDs to fixed, public search phrases.
+func MicrosoftDocsQuery(topic string) string {
+	switch topic {
+	case "aspnet-routing":
+		return "ASP.NET Core minimal API route handlers"
+	case "dotnet-httpclient":
+		return ".NET HttpClient guidelines connection pooling"
+	case "azure-app-service":
+		return "Azure App Service deploy a custom container"
+	case "wsl-containers":
+		return "Windows Subsystem for Linux containers wslc tutorial"
+	default:
+		return ""
+	}
+}
+
 // ValidGitHubPath accepts a bounded, repository-relative path.
 func ValidGitHubPath(value string) bool {
 	if value == "" || len(value) > 400 || !utf8.ValidString(value) || strings.ContainsAny(value, "\\%") || strings.IndexFunc(value, unicode.IsControl) >= 0 {
@@ -55,6 +71,10 @@ func (i Input) Validate() error {
 		if strings.TrimSpace(i.Query) == "" || len(i.Query) > 1000 || i.URL != "" || i.Owner != "" || i.Repo != "" || i.Path != "" {
 			return invalid()
 		}
+	case "microsoft_docs_search":
+		if MicrosoftDocsQuery(i.Query) == "" || i.URL != "" || i.Owner != "" || i.Repo != "" || i.Path != "" {
+			return invalid()
+		}
 	case "github_repo":
 		if !repositoryPart.MatchString(i.Owner) || !repositoryPart.MatchString(i.Repo) || i.Owner == "." || i.Owner == ".." || i.Repo == "." || i.Repo == ".." || (i.Path != "" && !ValidGitHubPath(i.Path)) || i.URL != "" || i.Query != "" {
 			return invalid()
@@ -67,7 +87,8 @@ func (i Input) Validate() error {
 
 // The same published input schemas are available to provider capability clients.
 var Schemas = map[string]json.RawMessage{
-	"fetch_page":  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048}},"required":["url"],"additionalProperties":false}`),
-	"web_search":  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1000}},"required":["query"],"additionalProperties":false}`),
-	"github_repo": json.RawMessage(`{"type":"object","properties":{"owner":{"type":"string","pattern":"^[A-Za-z0-9_.-]{1,100}$"},"repo":{"type":"string","pattern":"^[A-Za-z0-9_.-]{1,100}$"},"path":{"type":"string","maxLength":400}},"required":["owner","repo"],"additionalProperties":false}`),
+	"fetch_page":            json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","maxLength":2048}},"required":["url"],"additionalProperties":false}`),
+	"web_search":            json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":1000}},"required":["query"],"additionalProperties":false}`),
+	"microsoft_docs_search": json.RawMessage(`{"type":"object","properties":{"query":{"enum":["aspnet-routing","dotnet-httpclient","azure-app-service","wsl-containers"]}},"required":["query"],"additionalProperties":false}`),
+	"github_repo":           json.RawMessage(`{"type":"object","properties":{"owner":{"type":"string","pattern":"^[A-Za-z0-9_.-]{1,100}$"},"repo":{"type":"string","pattern":"^[A-Za-z0-9_.-]{1,100}$"},"path":{"type":"string","maxLength":400}},"required":["owner","repo"],"additionalProperties":false}`),
 }

@@ -31,6 +31,10 @@ func (r *Registry[T]) Register(spec Spec, run Handler[T]) error {
 	r.entries[spec.Name] = entry[T]{spec, run}
 	return nil
 }
+func (r *Registry[T]) Has(name string) bool {
+	_, exists := r.entries[name]
+	return exists
+}
 func (r *Registry[T]) Execute(ctx context.Context, input Input) (T, error) {
 	var zero T
 	tool, ok := r.entries[input.Tool]

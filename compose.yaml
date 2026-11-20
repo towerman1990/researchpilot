@@ -42,6 +42,7 @@ services:
       MODEL_PROXY_URL: ${MODEL_PROXY_URL:-}
       OUTBOUND_DOH_URL: ${OUTBOUND_DOH_URL:-}
       BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+      MICROSOFT_LEARN_MCP_ENABLED: ${MICROSOFT_LEARN_MCP_ENABLED:-false}
       GITHUB_READ_TOKEN: ${GITHUB_READ_TOKEN:-}
     secrets: [model_master_key]
     depends_on:

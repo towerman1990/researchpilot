@@ -26,7 +26,7 @@ func TestModelProfilesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldTask, err := tasks.Submit(ctx, user.Tenant, "first-profile", "First task", "", false)
+	oldTask, err := tasks.Submit(ctx, user.Tenant, "first-profile", "First task", "", taskservice.SubmitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestModelProfilesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondTask, err := tasks.Submit(ctx, user.Tenant, "second-profile", "Second task", "", false)
+	secondTask, err := tasks.Submit(ctx, user.Tenant, "second-profile", "Second task", "", taskservice.SubmitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestModelProfilesIntegration(t *testing.T) {
 	if err != nil || active == nil || active.Version != edited || len(profiles) != 2 || profiles[0].ID != firstVersion {
 		t.Fatalf("edit changed profile identity: %v", err)
 	}
-	newTask, err := tasks.Submit(ctx, user.Tenant, "edited-profile", "New task", "", false)
+	newTask, err := tasks.Submit(ctx, user.Tenant, "edited-profile", "New task", "", taskservice.SubmitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

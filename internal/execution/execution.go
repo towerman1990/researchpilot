@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/hibiken/asynq"
 
+	"researchpilot/internal/common/requestmeta"
 	"researchpilot/internal/repository"
 	"researchpilot/internal/repository/model"
 	taskservice "researchpilot/internal/task"
@@ -104,8 +106,10 @@ func NewStubTool() ResearchTool       { return stubTool{} }
 type taskRow struct {
 	preferencesSnapshot      *string
 	status, goal             string
+	creationLogID            string
 	parentTaskID             *string
 	requiresPlanReview       bool
+	reviewCitations          bool
 	approvedPlan             *string
 	generation, epoch        uint32
 	seq                      uint64
@@ -120,7 +124,7 @@ func lockTask(ctx context.Context, tx *repository.ExecutionTx, d delivery) (t ta
 	if err != nil {
 		return t, err
 	}
-	return taskRow{status: row.Status, goal: row.Goal, parentTaskID: row.ParentTaskID, preferencesSnapshot: row.PreferencesSnapshot, requiresPlanReview: row.RequiresPlanReview, approvedPlan: row.ApprovedPlan, generation: row.Generation, epoch: row.LeaseEpoch, seq: row.EventSeq, pastDeadline: row.PastDeadline, validLease: row.ValidLease, retries: row.RetryCount, remaining: time.Duration(row.RemainingSeconds * float64(time.Second)), modelVersion: row.ModelVersion}, nil
+	return taskRow{status: row.Status, goal: row.Goal, creationLogID: row.CreationLogID, parentTaskID: row.ParentTaskID, preferencesSnapshot: row.PreferencesSnapshot, requiresPlanReview: row.RequiresPlanReview, reviewCitations: row.ReviewCitations, approvedPlan: row.ApprovedPlan, generation: row.Generation, epoch: row.LeaseEpoch, seq: row.EventSeq, pastDeadline: row.PastDeadline, validLease: row.ValidLease, retries: row.RetryCount, remaining: time.Duration(row.RemainingSeconds * float64(time.Second)), modelVersion: row.ModelVersion}, nil
 }
 
 func (r Runner) claim(ctx context.Context, d delivery) (t taskRow, claimed bool, err error) {
@@ -164,6 +168,12 @@ func (r Runner) Execute(ctx context.Context, task *asynq.Task) error {
 }
 
 func (r Runner) executeDurable(ctx context.Context, d delivery, t taskRow) error {
+	logID := t.creationLogID
+	if logID == "" {
+		logID = d.Task
+	}
+	ctx = requestmeta.WithLogID(ctx, logID)
+	slog.Info("task_execution_started", "logid", logID, "task_id", d.Task, "generation", d.Generation, "lease_epoch", t.epoch)
 	execCtx, cancel := context.WithTimeout(ctx, t.remaining)
 	e := execution{Runner: r, delivery: d, epoch: t.epoch}
 	done := make(chan struct{})
@@ -242,7 +252,7 @@ func safeFailureCode(err error) string {
 func knownFailureCode(err error) string {
 	for ; err != nil; err = errors.Unwrap(err) {
 		switch err.Error() {
-		case "insufficient_evidence", "model_output_truncated", "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_tls_failed", "model_retry_exhausted", "model_configuration_revoked", "invalid_model_config", "invalid_report_json", "invalid_plan_schema", "invalid_source_id", "no_evidence":
+		case "insufficient_evidence", "model_output_truncated", "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_tls_failed", "model_retry_exhausted", "model_configuration_revoked", "invalid_model_config", "invalid_report_json", "invalid_plan_schema", "citation_review_invalid", "citation_review_unsupported", "invalid_source_id", "no_evidence":
 			return err.Error()
 		}
 	}

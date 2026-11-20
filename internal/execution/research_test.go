@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"researchpilot/internal/repository/model"
 	taskservice "researchpilot/internal/task"
@@ -55,14 +56,30 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestResearchIntegration(t *testing.T) { researchFixture(t, true, false, false) }
+func TestResearchIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true})
+}
 
-func TestInsufficientEvidenceIntegration(t *testing.T) { researchFixture(t, false, false, false) }
+func TestInsufficientEvidenceIntegration(t *testing.T) { researchFixture(t, researchFixtureOptions{}) }
 
-func TestCoverageJSONRepairIntegration(t *testing.T) { researchFixture(t, true, true, false) }
+func TestCoverageJSONRepairIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, malformed: true})
+}
 
-func TestPlanReviewIntegration(t *testing.T) { researchFixture(t, true, false, true) }
-func researchFixture(t *testing.T, sufficient, malformed, review bool) {
+func TestPlanReviewIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, reviewPlan: true})
+}
+
+func TestCitationReviewIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, reviewCitations: true})
+}
+
+type researchFixtureOptions struct {
+	sufficient, malformed, reviewPlan, reviewCitations bool
+}
+
+func researchFixture(t *testing.T, options researchFixtureOptions) {
+	sufficient, malformed, review := options.sufficient, options.malformed, options.reviewPlan
 	db := integrationDB(t)
 	keyPath := os.Getenv("MODEL_MASTER_KEY_FILE")
 	if keyPath == "" {
@@ -83,13 +100,20 @@ func researchFixture(t *testing.T, sufficient, malformed, review bool) {
 	if strings.Contains(string(encrypted), "test-only-api-key") {
 		t.Fatal("API key stored in plaintext")
 	}
-	if review {
+	if review || options.reviewCitations {
 		actions := taskservice.TaskActions{Store: executionStore(t, db)}
-		created, err := actions.Submit(t.Context(), d.Tenant, "plan-review-test", "Reviewable research goal", "", true)
+		submit := taskservice.SubmitOptions{ReviewPlan: review, ReviewCitations: options.reviewCitations}
+		created, err := actions.Submit(t.Context(), d.Tenant, "plan-review-test", "Reviewable research goal", "", submit)
 		if err != nil {
 			t.Fatal(err)
 		}
 		d.Task = created.ID
+		if options.reviewCitations {
+			submit.ReviewCitations = false
+			if _, err := actions.Submit(t.Context(), d.Tenant, "plan-review-test", "Reviewable research goal", "", submit); !errors.Is(err, taskservice.ErrIdempotencyConflict) {
+				t.Fatalf("changing citation review should change the idempotency payload: %v", err)
+			}
+		}
 	} else if _, err := db.Exec("UPDATE research_tasks SET model_version=1 WHERE id=?", d.Task); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +123,9 @@ func researchFixture(t *testing.T, sufficient, malformed, review bool) {
 		if req.URL.Host == "api.deepseek.com" {
 			raw, _ := io.ReadAll(req.Body)
 			content := `{"steps":[{"tool":"fetch_page","url":"https://example.com/docs"}]}`
-			if strings.Contains(string(raw), "findings") {
+			if strings.Contains(string(raw), "You are the citation reviewer") {
+				content = `{"supported":[true,false]}`
+			} else if strings.Contains(string(raw), "findings") {
 				var request struct{ Messages []struct{ Content string } }
 				if err := json.Unmarshal(raw, &request); err != nil {
 					t.Fatal(err)
@@ -108,7 +134,11 @@ func researchFixture(t *testing.T, sufficient, malformed, review bool) {
 				if len(ids) != 2 {
 					t.Fatal("model prompt lacks persisted evidence")
 				}
-				encoded, _ := json.Marshal(map[string]any{"findings": []map[string]any{{"text": "The evidence supports durable execution.", "sources": []string{ids[1]}}}, "limitations": []string{"Fixture evidence."}})
+				findings := []map[string]any{{"text": "The evidence supports durable execution.", "sources": []string{ids[1]}}}
+				if options.reviewCitations {
+					findings = append(findings, map[string]any{"text": "Unsupported fixture claim", "sources": []string{ids[1]}})
+				}
+				encoded, _ := json.Marshal(map[string]any{"findings": findings, "limitations": []string{"Fixture evidence."}})
 				content = string(encoded)
 			}
 			if strings.Contains(string(raw), "Assess evidence coverage") {
@@ -121,7 +151,7 @@ func researchFixture(t *testing.T, sufficient, malformed, review bool) {
 			if strings.Contains(string(raw), "Repair coverage JSON") {
 				content = `{"sufficient":true,"gaps":["A quoted note"]}`
 			}
-			encoded, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": content}, "finish_reason": "stop"}}, "usage": map[string]int{"total_tokens": 100}})
+			encoded, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": content}, "finish_reason": "stop"}}, "usage": map[string]int{"total_tokens": 100, "prompt_tokens": 70, "completion_tokens": 30}})
 			body = string(encoded)
 		} else {
 			fetchedURL = req.URL.String()
@@ -184,6 +214,14 @@ func researchFixture(t *testing.T, sufficient, malformed, review bool) {
 		expectedStatus = "PARTIAL"
 		expectedUsage = 600
 	}
+	if options.reviewCitations {
+		expectedStatus = "PARTIAL"
+		expectedUsage += 100
+		report, err := worker.store.ReadReport(t.Context(), d.Tenant, d.Task)
+		if err != nil || !strings.Contains(report, "The evidence supports durable execution.") || strings.Contains(report, "Unsupported fixture claim") {
+			t.Fatalf("cited findings were not filtered correctly: %q %v", report, err)
+		}
+	}
 	if status != expectedStatus {
 		t.Fatal(status)
 	}
@@ -194,6 +232,18 @@ func researchFixture(t *testing.T, sufficient, malformed, review bool) {
 	var used, reserved int
 	if err = db.QueryRow("SELECT tokens_used,tokens_reserved FROM research_tasks WHERE id=?", d.Task).Scan(&used, &reserved); err != nil || used != expectedUsage || reserved != 0 {
 		t.Fatalf("accounting=%d %d %v", used, reserved, err)
+	}
+	if options.reviewCitations {
+		tasks := taskservice.Tasks{Store: worker.store}
+		rows, err := tasks.ModelUsage(t.Context(), d.Tenant, "7", time.Now())
+		if err != nil || len(rows) != 1 || rows[0].BaseURL != "https://api.deepseek.com" ||
+			rows[0].Model != "deepseek-flash" || rows[0].InputTokens != 280 || rows[0].OutputTokens != 120 || rows[0].UnsplitTokens != 0 {
+			t.Fatalf("wrong split usage: %+v %v", rows, err)
+		}
+		foreign := newTestTask(t, db)
+		if rows, err := tasks.ModelUsage(t.Context(), foreign.Tenant, "7", time.Now()); err != nil || len(rows) != 0 {
+			t.Fatalf("foreign account received model usage: %+v %v", rows, err)
+		}
 	}
 }
 
@@ -241,7 +291,7 @@ func TestReportFollowUpIntegration(t *testing.T) {
 	actions := taskservice.TaskActions{Store: store}
 	const key = "follow-up-idempotency"
 	const question = "What does the original report mean by fencing?"
-	if _, err := actions.Submit(ctx, parent.Tenant, key, question, parent.Task, false); !errors.Is(err, taskservice.ErrReportNotReady) {
+	if _, err := actions.Submit(ctx, parent.Tenant, key, question, parent.Task, taskservice.SubmitOptions{}); !errors.Is(err, taskservice.ErrReportNotReady) {
 		t.Fatalf("follow-up accepted before report: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE research_tasks SET status='PARTIAL' WHERE id=?", parent.Task); err != nil {
@@ -251,7 +301,7 @@ func TestReportFollowUpIntegration(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "INSERT INTO research_reports(tenant_id,task_id,markdown) VALUES(?,?,?)", parent.Tenant, parent.Task, background); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := actions.Submit(ctx, foreign.Tenant, key, question, parent.Task, false); !errors.Is(err, taskservice.ErrTaskNotFound) {
+	if _, err := actions.Submit(ctx, foreign.Tenant, key, question, parent.Task, taskservice.SubmitOptions{}); !errors.Is(err, taskservice.ErrTaskNotFound) {
 		t.Fatalf("foreign report did not return not found: %v", err)
 	}
 	legacy, err := store.ReadTask(ctx, parent.Tenant, parent.Task)
@@ -265,15 +315,15 @@ func TestReportFollowUpIntegration(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("fixture model configuration failed: %d", rec.Code)
 	}
-	child, err := actions.Submit(ctx, parent.Tenant, key, question, parent.Task, false)
+	child, err := actions.Submit(ctx, parent.Tenant, key, question, parent.Task, taskservice.SubmitOptions{})
 	if err != nil || child.ParentTaskID == nil || *child.ParentTaskID != parent.Task || child.Goal != question {
 		t.Fatalf("submitted follow-up: %+v %v", child, err)
 	}
-	replay, err := actions.Submit(ctx, parent.Tenant, key, question, strings.ToUpper(parent.Task), false)
+	replay, err := actions.Submit(ctx, parent.Tenant, key, question, strings.ToUpper(parent.Task), taskservice.SubmitOptions{})
 	if err != nil || replay.ID != child.ID {
 		t.Fatalf("replayed follow-up created different task: %v", err)
 	}
-	if _, err := actions.Submit(ctx, parent.Tenant, key, question, "", false); !errors.Is(err, taskservice.ErrIdempotencyConflict) {
+	if _, err := actions.Submit(ctx, parent.Tenant, key, question, "", taskservice.SubmitOptions{}); !errors.Is(err, taskservice.ErrIdempotencyConflict) {
 		t.Fatalf("goal-only request matched follow-up digest: %v", err)
 	}
 	runner := Runner{store: store}
@@ -320,7 +370,7 @@ func TestResearchPreferencesIntegration(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("fixture model configuration failed: %d", rec.Code)
 	}
-	created, err := actions.Submit(ctx, owner.Tenant, "prefs-original", "First task", "", true)
+	created, err := actions.Submit(ctx, owner.Tenant, "prefs-original", "First task", "", taskservice.SubmitOptions{ReviewPlan: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,14 +383,14 @@ func TestResearchPreferencesIntegration(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "INSERT INTO research_reports(tenant_id,task_id,markdown) VALUES(?,?,?)", owner.Tenant, owner.Task, "Original report"); err != nil {
 		t.Fatal(err)
 	}
-	followUp, err := actions.Submit(ctx, owner.Tenant, "prefs-followup", "Follow-up task", owner.Task, false)
+	followUp, err := actions.Submit(ctx, owner.Tenant, "prefs-followup", "Follow-up task", owner.Task, taskservice.SubmitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := actions.SavePreferences(ctx, owner.Tenant, model.ResearchPreferences{}); err != nil {
 		t.Fatal(err)
 	}
-	cleared, err := actions.Submit(ctx, owner.Tenant, "prefs-cleared", "Default settings", "", false)
+	cleared, err := actions.Submit(ctx, owner.Tenant, "prefs-cleared", "Default settings", "", taskservice.SubmitOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

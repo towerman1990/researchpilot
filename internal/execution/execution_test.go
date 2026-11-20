@@ -11,12 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +38,7 @@ import (
 	"researchpilot/internal/repository/model"
 	"researchpilot/internal/service"
 	taskservice "researchpilot/internal/task"
+	"researchpilot/internal/transport/httpserver"
 )
 
 type snapshot = model.TaskSnapshot
@@ -90,6 +93,10 @@ func TestDurableExecutionIntegration(t *testing.T) {
 	ctx := context.Background()
 	r := Runner{store: executionStore(t, db), tool: stubTool{}, model: stubProvider{}}
 	d := newTestTask(t, db)
+	logID := identity.New(16)
+	if _, err := db.ExecContext(ctx, "UPDATE research_tasks SET creation_logid=? WHERE id=?", logID, d.Task); err != nil {
+		t.Fatal(err)
+	}
 	state, ok, err := r.claim(ctx, d)
 	if err != nil || !ok {
 		t.Fatalf("claim=%v %v", ok, err)
@@ -130,6 +137,9 @@ func TestDurableExecutionIntegration(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("recovery claim=%v %v", ok, err)
 	}
+	if next.creationLogID != logID {
+		t.Fatalf("recovered logid=%q, want %q", next.creationLogID, logID)
+	}
 	if err = e.mutate(ctx, func(*repository.ExecutionTx, taskRow) error { return nil }); !errors.Is(err, errLeaseLost) {
 		t.Fatalf("stale worker err=%v", err)
 	}
@@ -147,8 +157,16 @@ func TestDurableExecutionIntegration(t *testing.T) {
 	if used != 200 || reserved != 0 {
 		t.Fatalf("settlement %d %d", used, reserved)
 	}
-	if err = r.executeDurable(ctx, d, next); err != nil {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	err = r.executeDurable(ctx, d, next)
+	slog.SetDefault(previousLogger)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), `"msg":"execution_step","logid":"`+logID+`"`) {
+		t.Fatalf("worker log missing request correlation: %s", logs.String())
 	}
 	var status string
 	if err = db.QueryRow("SELECT status FROM research_tasks WHERE id=?", d.Task).Scan(&status); err != nil {
@@ -264,7 +282,7 @@ func (a *apiServer) createTask(w http.ResponseWriter, r *http.Request, tenant st
 	if err != nil {
 		panic(err)
 	}
-	task, err := (taskservice.TaskActions{Store: store}).Submit(r.Context(), tenant, r.Header.Get("Idempotency-Key"), input.Goal, "", false)
+	task, err := (taskservice.TaskActions{Store: store}).Submit(r.Context(), tenant, r.Header.Get("Idempotency-Key"), input.Goal, "", taskservice.SubmitOptions{})
 	if err == nil {
 		w.Header().Set("Location", "/api/v1/research/tasks/"+task.ID)
 	}
@@ -351,6 +369,7 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	h := server.New(server.WithListener(ln), server.WithTransport(standard.NewTransporter))
+	h.Use(httpserver.AccessLog)
 	auth := handler.Auth{Store: store, Origin: "http://" + ln.Addr().String()}
 	auth.RegisterRoutes(h)
 	handler.Models{Service: service.Models{Store: store}, Auth: auth}.RegisterRoutes(h)
@@ -383,6 +402,7 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 				}
 				req.Header.Set("Origin", auth.Origin)
 			}
+			req.Header.Set("X-Log-ID", "caller-chosen-id")
 			res, err := client.Do(req)
 			if err != nil {
 				t.Fatal(err)
@@ -399,6 +419,10 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 			t.Fatalf("unexpected web index: %q", got)
 		}
 		check("GET", "/api/v1/unknown", "", 404)
+		check("GET", "/api/v1/research/usage", "", 401)
+		check("GET", "/api/v1/research/overview", "", 401)
+		check("GET", "/api/v1/research/tasks/"+e.Task+"/report/evidence", "", 401)
+		check("GET", "/api/v1/research/tasks/"+e.Task+"/report/feedback", "", 401)
 		credentials := fmt.Sprintf("{\"email\":\"%s@example.test\",\"password\":\"fixture-password\"}", identity.New(16))
 		check("POST", "/api/v1/auth/register", credentials, 201)
 		check("POST", "/api/v1/auth/register", credentials, 409)
@@ -406,6 +430,8 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 		check("GET", "/api/v1/auth/session", "", 200)
 		check("GET", "/api/v1/research/tasks", "", 200)
 		check("GET", "/api/v1/research/tasks/"+e.Task, "", 404)
+		check("GET", "/api/v1/research/tasks/"+e.Task+"/report/evidence", "", 404)
+		check("PUT", "/api/v1/research/tasks/"+e.Task+"/report/feedback", `{"rating":"helpful"}`, 404)
 		if os.Getenv("MODEL_MASTER_KEY_FILE") == "" {
 			t.Setenv("MODEL_MASTER_KEY_FILE", testMaster(t))
 		}
@@ -419,9 +445,71 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 			if err := json.Unmarshal(check("POST", "/api/v1/research/tasks", "{\"goal\":\"native HTTP integration\"}", 202), out); err != nil {
 				t.Fatal(err)
 			}
+			id := lastHeader.Get("X-Log-ID")
+			if decoded, err := hex.DecodeString(id); err != nil || len(decoded) != 16 {
+				t.Fatalf("invalid generated logid: %q", id)
+			}
+			if out.CreationLogID == nil || (out == &created) != (*out.CreationLogID == id) {
+				t.Fatalf("unexpected creation logid for HTTP request %q: %+v", id, out.CreationLogID)
+			}
 		}
 		if created.ID == "" || replay.ID != created.ID || created.Status != "QUEUED" {
 			t.Fatal(created, replay)
+		}
+		if *created.CreationLogID != *replay.CreationLogID {
+			t.Fatal("idempotent replay changed the original logid")
+		}
+		var initialOverview taskservice.Overview
+		check("GET", "/api/v1/research/tasks/"+created.ID+"/report/evidence", "", 409)
+		check("GET", "/api/v1/research/tasks/"+created.ID+"/report/feedback", "", 409)
+		if err := json.Unmarshal(check("GET", "/api/v1/research/overview", "", 200), &initialOverview); err != nil ||
+			len(initialOverview.Open) != 1 || initialOverview.Open[0].ID != created.ID || initialOverview.Finished == nil ||
+			len(initialOverview.Finished) != 0 || initialOverview.MoreOpen {
+			t.Fatalf("unexpected initial workspace: %+v, %v", initialOverview, err)
+		}
+		{
+			now := time.Now().UTC().Truncate(24 * time.Hour)
+			for _, fixture := range []struct {
+				task, status string
+				tokens       int
+				settled      time.Time
+				failure      any
+			}{
+				{created.ID, "ACTUAL", 12, now, nil},
+				{created.ID, "ESTIMATED", 34, now, "model_request_timeout"},
+				{created.ID, "RELEASED", 99, now, nil},
+				{created.ID, "ACTUAL", 10, now.AddDate(0, 0, -7), nil},
+				{e.Task, "ACTUAL", 88, now, nil},
+			} {
+				if _, err := db.Exec(`INSERT INTO model_attempts
+					(tenant_id,task_id,attempt_id,lease_epoch,status,reserved_tokens,charged_tokens,settled_at,error_code)
+					SELECT tenant_id,id,?,1,?,100,?,?,? FROM research_tasks WHERE id=?`,
+					identity.New(16), fixture.status, fixture.tokens, fixture.settled, fixture.failure, fixture.task); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var week, month []model.UsageDay
+			if _, err := db.ExecContext(ctx, "UPDATE model_attempts SET input_tokens=8,output_tokens=4 WHERE task_id=? AND charged_tokens=12 AND status='ACTUAL'", created.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(check("GET", "/api/v1/research/usage", "", 200), &week); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(check("GET", "/api/v1/research/usage?days=30", "", 200), &month); err != nil {
+				t.Fatal(err)
+			}
+			expected := model.UsageDay{Day: now.Format(time.DateOnly), ActualTokens: 12, EstimatedTokens: 34, Attempts: 2, FailedAttempts: 1}
+			older := model.UsageDay{Day: now.AddDate(0, 0, -7).Format(time.DateOnly), ActualTokens: 10, Attempts: 1}
+			if len(week) != 7 || !slices.Contains(week, expected) || slices.Contains(week, older) || len(month) != 30 || !slices.Contains(month, older) || !slices.Contains(month, expected) {
+				t.Fatalf("unexpected usage: week=%+v month=%+v", week, month)
+			}
+			check("GET", "/api/v1/research/usage?days=8", "", 422)
+			var modelUsage []model.ModelUsage
+			if err := json.Unmarshal(check("GET", "/api/v1/research/usage/models?days=30", "", 200), &modelUsage); err != nil ||
+				len(modelUsage) != 1 || modelUsage[0].InputTokens != 8 || modelUsage[0].OutputTokens != 4 ||
+				modelUsage[0].UnsplitTokens != 10 || modelUsage[0].EstimatedTokens != 34 {
+				t.Fatalf("wrong model cost inputs: %+v %v", modelUsage, err)
+			}
 		}
 		check("POST", "/api/v1/research/tasks", "{\"goal\":\"different goal\"}", 409)
 		if err := json.Unmarshal(check("POST", "/api/v1/research/tasks/"+created.ID+"/cancel", "{}", 202), &cancelled); err != nil || cancelled.Status != "CANCELLED" || cancelled.Seq != created.Seq+1 {
@@ -455,6 +543,28 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 				t.Fatalf("unexpected results for a different tenant's cursor: %v", err)
 			}
 			check("GET", history+"?before=invalid", "", 422)
+
+			oldApproval := identity.New(16)
+			if _, err := db.ExecContext(ctx, `INSERT INTO research_tasks(id,tenant_id,goal,status,event_seq,deadline_at,created_at)
+				VALUES(?,?,?,'AWAITING_APPROVAL',1,UTC_TIMESTAMP(6)+INTERVAL 1 HOUR,'1999-01-01')`, oldApproval, tenant, "older plan"); err != nil {
+				t.Fatal(err)
+			}
+			var workspace taskservice.Overview
+			if err := json.Unmarshal(check("GET", "/api/v1/research/overview", "", 200), &workspace); err != nil ||
+				len(workspace.Open) != 1 || workspace.Open[0].ID != oldApproval || workspace.Open[0].Status != "AWAITING_APPROVAL" ||
+				len(workspace.Finished) != 10 || workspace.Finished[0].ID != created.ID || workspace.Finished[0].FinishedAt == nil || workspace.MoreOpen {
+				t.Fatalf("unexpected workspace after cancellation: %+v, %v", workspace, err)
+			}
+			if _, err := db.ExecContext(ctx, `UPDATE research_tasks SET status='RUNNING',phase='executing',
+				deadline_at=UTC_TIMESTAMP(6)+INTERVAL 1 HOUR,lease_until=UTC_TIMESTAMP(6)+INTERVAL 1 HOUR
+				WHERE tenant_id=? AND created_at='2000-01-01'`, tenant); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(check("GET", "/api/v1/research/overview", "", 200), &workspace); err != nil ||
+				len(workspace.Open) != 50 || !workspace.MoreOpen || workspace.Open[0].Phase == nil || *workspace.Open[0].Phase != "executing" ||
+				len(workspace.Finished) != 1 {
+				t.Fatalf("unexpected workspace at the open task limit: %+v, %v", workspace, err)
+			}
 		})
 		check("DELETE", "/api/v1/model-config", "{}", 200)
 		check("POST", "/api/v1/auth/logout", "{}", 204)

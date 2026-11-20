@@ -14,6 +14,7 @@ import (
 
 	"researchpilot/internal/agent"
 	"researchpilot/internal/common/identity"
+	"researchpilot/internal/common/requestmeta"
 	"researchpilot/internal/repository"
 	"researchpilot/internal/repository/model"
 	"researchpilot/internal/service"
@@ -31,15 +32,20 @@ var (
 )
 
 type TaskWriter interface {
+	ScheduleStore
 	ReadResearchPreferences(context.Context, string) (model.ResearchPreferences, error)
-	Write(context.Context, string, bool, func(repository.WriteTx) error) error
 	RequestKey(context.Context, string, [32]byte) (model.RequestKey, error)
 	ReadTask(context.Context, string, string) (model.TaskSnapshot, error)
 }
 
 type TaskActions struct{ Store TaskWriter }
 
-func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID string, review bool, attachments ...Material) (model.TaskSnapshot, error) {
+type SubmitOptions struct {
+	ReviewPlan      bool
+	ReviewCitations bool
+}
+
+func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID string, options SubmitOptions, attachments ...Material) (model.TaskSnapshot, error) {
 	goal = strings.TrimSpace(goal)
 	if len(key) < 8 || len(key) > 128 || goal == "" || !utf8.ValidString(goal) || utf8.RuneCountInString(goal) > 2000 {
 		return model.TaskSnapshot{}, ErrInvalidTask
@@ -53,8 +59,11 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		// A leading invalid UTF-8 byte separates follow-up digests from existing goal-only digests.
 		rd = sha256.Sum256([]byte("\xff" + parentID + goal))
 	}
-	if review {
+	if options.ReviewPlan {
 		rd = sha256.Sum256(append([]byte{0xfe}, rd[:]...))
+	}
+	if options.ReviewCitations {
+		rd = sha256.Sum256(append([]byte{0xfc}, rd[:]...))
 	}
 	files, err := normalizeMaterials(attachments)
 	if err != nil {
@@ -90,7 +99,7 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 			}
 		}
 		id = identity.New(16)
-		if err := tx.AddTask(tenant, id, goal, parentID, review, true); err != nil {
+		if err := tx.AddTask(tenant, id, goal, parentID, requestmeta.LogID(ctx), options.ReviewPlan, options.ReviewCitations, true); err != nil {
 			return err
 		}
 		version, err := tx.ActiveModelVersion(tenant)
@@ -103,7 +112,7 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 				return err
 			}
 		}
-		if review && version == 0 {
+		if (options.ReviewPlan || options.ReviewCitations) && version == 0 {
 			return service.ErrModelNotConfigured
 		}
 		if version > 0 {
@@ -133,10 +142,7 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		} else if err != nil {
 			return err
 		}
-		if err := tx.AppendEvent(tenant, id, 1, `{"status":"QUEUED"}`); err != nil {
-			return err
-		}
-		return tx.AddOutbox(tenant, id)
+		return enqueueNewTask(tx, tenant, id)
 	})
 	if errors.Is(err, errDuplicateRequest) {
 		previous, readErr := s.Store.RequestKey(ctx, tenant, kd)
@@ -152,6 +158,13 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		return model.TaskSnapshot{}, err
 	}
 	return s.Store.ReadTask(ctx, tenant, id)
+}
+
+func enqueueNewTask(tx repository.WriteTx, tenant, id string) error {
+	if err := tx.AppendEvent(tenant, id, 1, `{"status":"QUEUED"}`); err != nil {
+		return err
+	}
+	return tx.AddOutbox(tenant, id)
 }
 
 func (s TaskActions) ApprovePlan(ctx context.Context, tenant, id string, seq uint64, rawPlan json.RawMessage) (model.TaskSnapshot, error) {

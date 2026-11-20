@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"researchpilot/internal/common/identity"
+	"researchpilot/internal/model"
 	"researchpilot/internal/repository"
 )
 
@@ -42,7 +43,7 @@ func Reserve(ctx context.Context, store *repository.ExecutionTx, tenant, task, k
 
 // Settle returns the charged amount and whether a reserved attempt was updated.
 // It must run under the same task lease lock as Reserve.
-func Settle(ctx context.Context, store *repository.ExecutionTx, tenant, task, id string, epoch, used uint32, estimated bool, failure string) (uint32, bool, error) {
+func Settle(ctx context.Context, store *repository.ExecutionTx, tenant, task, id string, epoch, used uint32, estimated bool, failure string, breakdown *model.TokenBreakdown) (uint32, bool, error) {
 	record, err := store.Attempt(ctx, tenant, task, id, epoch)
 	if err != nil {
 		return 0, false, err
@@ -51,11 +52,14 @@ func Settle(ctx context.Context, store *repository.ExecutionTx, tenant, task, id
 		return 0, false, nil
 	}
 	status := "ACTUAL"
+	var input, output *uint32
 	if estimated {
 		used = record.ReservedTokens
 		status = "ESTIMATED"
+	} else if breakdown != nil {
+		input, output = &breakdown.Input, &breakdown.Output
 	}
-	if err := store.SettleAttempt(ctx, tenant, task, id, status, failure, used, record.ReservedTokens); err != nil {
+	if err := store.SettleAttempt(ctx, tenant, task, id, status, failure, used, record.ReservedTokens, input, output); err != nil {
 		return 0, false, err
 	}
 	return used, true, nil
@@ -75,11 +79,11 @@ func (e execution) reserve(ctx context.Context, tokens uint32) (string, error) {
 }
 
 func (e execution) settle(ctx context.Context, id string, used uint32, estimated bool) error {
-	return e.settleOutcome(ctx, id, used, estimated, "")
+	return e.settleOutcome(ctx, id, used, estimated, "", nil)
 }
-func (e execution) settleOutcome(ctx context.Context, id string, used uint32, estimated bool, failure string) error {
+func (e execution) settleOutcome(ctx context.Context, id string, used uint32, estimated bool, failure string, breakdown *model.TokenBreakdown) error {
 	return e.mutate(ctx, func(tx *repository.ExecutionTx, t taskRow) error {
-		charged, updated, err := Settle(ctx, tx, e.Tenant, e.Task, id, e.epoch, used, estimated, failure)
+		charged, updated, err := Settle(ctx, tx, e.Tenant, e.Task, id, e.epoch, used, estimated, failure, breakdown)
 		if err != nil {
 			return err
 		}

@@ -1,0 +1,44 @@
+.report-evidence {
+  margin-top: 20px;
+  background: #f8faff;
+  border-color: #dce6f7;
+}
+
+.report-evidence-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 0 0 12px;
+}
+
+.report-evidence-stats dt {
+  color: #53627a;
+  font-size: 12px;
+}
+
+.report-evidence-stats dd {
+  margin: 3px 0 0;
+  font-weight: 600;
+}
+
+.report-evidence-list {
+  margin: 0;
+  padding-left: 1.7em;
+}
+
+.report-evidence-list li {
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.report-evidence .report-evidence-source {
+  max-width: 100%;
+  height: auto;
+  padding: 3px 8px;
+  white-space: normal;
+  text-align: left;
+}
+
+@media print {
+  .report-evidence { display: none !important; }
+}

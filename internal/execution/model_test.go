@@ -19,15 +19,15 @@ func TestDeepSeekLive(t *testing.T) {
 	client := service.ModelHTTPClient()
 	defer client.CloseIdleConnections()
 	config := modelConfig{BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", Key: key}
-	content, usage, err := CallModel(ctx, client, config, "Return JSON {\"ok\":true}.")
+	result, err := CallModel(ctx, client, config, "Return JSON {\"ok\":true}.")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var response struct {
 		OK bool `json:"ok"`
 	}
-	if json.Unmarshal([]byte(content), &response) != nil || !response.OK {
+	if json.Unmarshal([]byte(result.Text), &response) != nil || !response.OK {
 		t.Fatal("model did not return expected JSON")
 	}
-	t.Logf("DeepSeek JSON response verified; total tokens=%d", usage)
+	t.Logf("DeepSeek JSON response verified; total tokens=%d", result.Tokens)
 }

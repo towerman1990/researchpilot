@@ -4,15 +4,17 @@
 |---|---|
 | POST /auth/register、/auth/login、/auth/refresh、/auth/logout | 注册登录、刷新轮换、撤销，Web 用安全 Cookie，桌面采用平台会话适配。 |
 | GET / POST /conversations | 游标列表或创建会话。P0 用于任务归组。 |
-| POST /research/tasks | 请求提供 `goal` 以及可选的 `parent_task_id`、`review_plan` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同问题、父任务、审批选项或资料时返回 409。 |
+| POST /research/tasks | 请求提供 `goal` 以及可选的 `parent_task_id`、`review_plan`、`review_citations` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同请求内容时返回 409。 |
 | GET /research/tasks | 返回当前租户的任务数组，每页最多 50 条，按创建时间和任务 ID 降序排列。有更早的记录时，响应头 `X-Next-Cursor` 提供下一页的 `before` 值。 |
 | GET /research/tasks/{id} | 获取任务快照，包括状态、阶段和最新事件序号。 |
 | GET /research/tasks/{id}/events | SSE，按 Last-Event-ID 回放，也接受 after 用于初始连接。 |
 | POST /research/tasks/{id}/cancel | 202 表示已受理；重复取消返回当前状态，其他终态冲突 409。 |
 | GET /research/tasks/{id}/report、/research/tasks/{id}/sources/{source_id} | 获取报告及支撑证据；报告尚未生成时返回 409 和状态。 |
+| GET /research/tasks/{id}/report/evidence | 获取报告类型、归档来源数和按编号排列的引用。沿用报告的访问权限与状态码。 |
+| GET / PUT /research/tasks/{id}/report/feedback | 读取或更新本账号对报告的反馈。评分为 `helpful` 或 `not_helpful`，备注最多 500 字。尚无反馈时读取返回空字符串。 |
 | GET / PUT /model-config、POST /model-config/probe | 读取脱敏配置、存新版本、探测能力。探测按租户限流。 |
 
-登录失败使用通用错误，API 错误响应提供 `code`。Worker 的执行步骤日志可按 `task_id` 筛选。HTTP 请求标识及跨 API 与 Worker 的链路关联待实现。输入错误 422，未登录 401，跨租户实体 404，限流 429。列表使用稳定游标，时间为 ISO 8601 UTC。
+登录失败使用通用错误，API 错误响应提供 `code`。Hertz 为每个请求生成 `X-Log-ID`，访问日志记录编号、路由模板、方法、状态和耗时。任务快照的 `creation_logid` 可关联创建请求和 Worker 执行日志，任务重试和恢复继续使用原编号。输入错误 422，未登录 401，跨租户实体 404，限流 429。列表使用稳定游标，时间为 ISO 8601 UTC。
 
 ## 基于报告追问
 
@@ -38,6 +40,36 @@
 ## 上传研究资料
 
 创建任务时可传入 `attachments` 数组，每项包含 `name` 与 UTF-8 `content`。支持 TXT 与 Markdown，限两份，每份最多 24 KiB。非法输入返回 422。资料与任务在同一事务中保存，并通过当前任务的授权来源接口读取。资料摘录作为模型证据，报告可引用原文件名。
+
+## 研究用量
+
+`GET /research/usage?days=7` 返回当前账号最近 7 个 UTC 自然日的用量，包含当天。可选 `days=30`，其他值返回 422。结果按日期升序排列，无用量的日期返回零值。
+
+每日字段为 `day`、`actual_tokens`、`estimated_tokens`、`attempts` 和 `failed_attempts`。按调用结算时间统计，包含实际和估算结算，失败数来自已记录错误码的调用。供应商费用以账单为准。
+
+`GET /research/usage/models` 使用相同的时间范围，按个人模型地址与名称返回 `input_tokens`、`output_tokens`、`unsplit_tokens` 和 `estimated_tokens`。输入输出分项需要由上游同时提供并与总量一致。站内试用调用仍计入通用用量面板。
+
+## 多任务概览
+
+`GET /research/overview` 返回当前账号的 `open`、`finished` 和 `more_open`。未结束任务按创建时间倒序，最多 50 条，超过时 `more_open` 为真。已结束任务按结束时间倒序，最多 10 条。
+
+条目包含任务 ID、研究目标、状态和 UTC 创建时间，并在有值时返回执行阶段与结束时间。工作区可见时定时刷新，单个任务仍可在详情页通过 SSE 实时跟踪。
+
+## 研究评估
+
+`GET /research/evaluation?days=7` 返回本账号真实研究的运行结果、报告与反馈计数，以及最近 12 项可复查的任务。可选 `days=30`。以任务结束时间划分 UTC 自然日，演示任务不计入。
+
+`cited_reports` 是至少有一条归档引用的报告数。反馈取报告当前的评分，复查列表包含部分完成、失败，以及已完成但被标记为 `not_helpful` 的任务。
+
+## 定时研究
+
+`GET /research/schedules` 列出当前账号的研究计划，活动计划优先，最多 100 条。`POST /research/schedules` 接受 `goal`、RFC 3339 格式的 `first_run` 和 `interval_days`。间隔为 0、1 或 7，分别表示单次、每天和每周。`POST /research/schedules/{id}/cancel` 取消仍活动的计划。
+
+创建和触发都使用当前账号的个人模型配置。触发时没有可用配置则标为 `blocked`。Worker 在同一事务中创建任务、写入 Outbox 并推进计划。停机跨过多个周期时只补建一次，下一次运行回到原间隔。响应中的 `last_task_id` 可用于查看最近一次触发的任务。
+
+创建时可传 `notify_results: true`。活动计划可通过 `POST /research/schedules/{id}/subscription` 更新此字段。订阅以任务触发时的计划设置为准。
+
+`GET /research/schedule-results` 返回本账号已结束的订阅任务，未读优先，每组按结束时间倒序，最多 50 条。`POST /research/schedule-results/{task_id}/read` 将结果标为已读，重复调用返回 204。
 
 ## SSE 恢复与登录
 

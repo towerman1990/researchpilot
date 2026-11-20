@@ -113,3 +113,22 @@ func TestTruncatedCompletionKeepsKnownUsage(t *testing.T) {
 		t.Fatal(out, err)
 	}
 }
+
+func TestProviderTokenBreakdown(t *testing.T) {
+	for _, test := range []struct {
+		usage string
+		want  *TokenBreakdown
+	}{
+		{`"total_tokens":17,"prompt_tokens":12,"completion_tokens":5`, &TokenBreakdown{12, 5}},
+		{`"total_tokens":17`, nil},
+		{`"total_tokens":17,"prompt_tokens":12,"completion_tokens":7`, nil},
+		{`"total_tokens":17,"prompt_tokens":"12","completion_tokens":5`, nil},
+	} {
+		body := `{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}],"usage":{` + test.usage + `}}`
+		out, err := fixture(t, body, 200).Generate(t.Context(), Request{})
+		if err != nil || out.Tokens != 17 || (out.Breakdown == nil) != (test.want == nil) ||
+			(test.want != nil && *out.Breakdown != *test.want) {
+			t.Fatalf("usage %s: %+v, %v", test.usage, out, err)
+		}
+	}
+}

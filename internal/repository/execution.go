@@ -105,9 +105,9 @@ func (s *ExecutionTx) InsertAttempt(ctx context.Context, tenant, id, attemptID s
 func (s *ExecutionTx) Attempt(ctx context.Context, tenant, id, attemptID string, epoch uint32) (model.BudgetAttempt, error) {
 	return requireOne(s.q.TaskSnapshot.WithContext(ctx).FindModelAttempt(tenant, id, attemptID, epoch))
 }
-func (s *ExecutionTx) SettleAttempt(ctx context.Context, tenant, id, attemptID, status, failure string, used, reserved uint32) error {
+func (s *ExecutionTx) SettleAttempt(ctx context.Context, tenant, id, attemptID, status, failure string, used, reserved uint32, input, output *uint32) error {
 	q := s.q.TaskSnapshot.WithContext(ctx)
-	if err := q.SettleModelAttempt(tenant, id, attemptID, status, failure, used); err != nil {
+	if err := q.SettleModelAttempt(tenant, id, attemptID, status, failure, used, input, output); err != nil {
 		return err
 	}
 	return q.ChargeTokens(tenant, id, reserved, used)

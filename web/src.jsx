@@ -21,10 +21,12 @@ const errors = {
   model_profile_changed:'当前配置已变化，请刷新模型设置后再编辑。',
   api_key_required:'新增配置或更换 Base URL 时，请填写对应的 API Key。',
   invalid_research_preferences:'请选择有效的研究偏好。',
+  invalid_research_schedule:'请输入研究目标并选择有效的未来时间。',
+  active_schedule_not_found:'计划已结束或已取消，请刷新列表。',
   invalid_plan:'计划内容不符合要求，请检查每一步的资料来源。',
   invalid_plan_schema:'没能生成可审批的计划，请调整目标后重试。',
   plan_not_awaiting_approval:'计划状态已变化，请查看最新任务进度。',
-  model_not_configured:'请配置模型或使用平台试用后再生成待审批计划。',
+  model_not_configured:'请配置个人模型或使用平台试用。',
   report_not_ready:'请从已生成报告的任务发起追问。',
   task_not_found:'找不到这项研究任务。',
   invalid_task_request:'请输入 1 到 2000 字的研究目标。',
@@ -72,6 +74,11 @@ async function api(url, body, headers) {
   const {data} = await requestJSON(url, body === undefined ? undefined : {
     method:'POST', headers:{'Content-Type':'application/json', ...headers}, body:JSON.stringify(body)
   });
+  return data;
+}
+
+async function fetchOverview(signal) {
+  const {data} = await requestJSON('/api/v1/research/overview', {signal});
   return data;
 }
 
@@ -321,7 +328,7 @@ function App() {
         setConnection('正在恢复任务快照');
         void connect();
       });
-      for (const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','plan_updated','replan_started','report_ready']) {
+      for (const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','plan_updated','replan_started','citation_review_started','citation_review_completed','report_ready']) {
         source.addEventListener(type, event => {
           if (!ownsStream()) return;
           const value = JSON.parse(event.data);
@@ -366,17 +373,17 @@ function App() {
     finally { setBusy(false); }
   }
 
-  async function submit(event, reviewPlan, attachments) {
+  async function submit(event, reviewPlan, attachments, reviewCitations) {
     event.preventDefault();
-    await submitTask(goal, '', reviewPlan, attachments);
+    await submitTask(goal, '', reviewPlan, attachments, reviewCitations);
   }
 
-  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = []) {
+  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false) {
     setBusy(true); setError('');
     const value = question.trim();
     const attachmentKey = JSON.stringify(attachments);
-    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.attachmentKey !== attachmentKey) {
-      requestKey.current = {goal:value,parentTaskID,reviewPlan,attachmentKey,id:newRequestID()};
+    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey) {
+      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,attachmentKey,id:newRequestID()};
     }
     const request = requestKey.current;
     const scope = sessionScope.current;
@@ -385,6 +392,7 @@ function App() {
       const payload = {goal:value};
       if (parentTaskID) payload.parent_task_id = parentTaskID;
       if (reviewPlan) payload.review_plan = true;
+      if (reviewCitations) payload.review_citations = true;
       if (attachments.length) payload.attachments = attachments;
       const created = await api(path,payload,{'Idempotency-Key':request.id});
       if (sessionScope.current !== scope) return;
@@ -481,7 +489,7 @@ function App() {
     }}>重试</button></div> : <p role="status">正在检查登录状态</p>}
   </main>;
   if (!user) return <AuthView {...{register,setRegister,authenticate,error,setError,busy}}/>;
-  return <Workspace readSource={api} {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,submitTask,approvePlan,busy,saveModel,activateModel,probeModel,revokeModel,preferences,preferencesError,loadPreferences,savePreferences,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
+  return <Workspace readSource={api} readOverview={fetchOverview} {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,submitTask,approvePlan,busy,saveModel,activateModel,probeModel,revokeModel,preferences,preferencesError,loadPreferences,savePreferences,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
 }
 
 createRoot(document.getElementById('root')).render(<App/>);

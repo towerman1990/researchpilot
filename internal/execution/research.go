@@ -21,7 +21,6 @@ import (
 	"researchpilot/internal/repository"
 	"researchpilot/internal/repository/model"
 	"researchpilot/internal/service"
-	researchtools "researchpilot/internal/tools/research"
 )
 
 func (e execution) generate(ctx context.Context, config modelConfig, prompt string) (string, error) {
@@ -50,17 +49,17 @@ func (e execution) generate(ctx context.Context, config modelConfig, prompt stri
 			}
 			return "", err
 		}
-		text, usage, callErr := CallModel(ctx, e.modelHTTP, config, prompt)
-		estimated := usage == 0
+		result, callErr := CallModel(ctx, e.modelHTTP, config, prompt)
+		estimated := result.Tokens == 0
 		switch modelFailureCode(callErr) {
 		case "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_host_forbidden", "invalid_model_request":
 			estimated = false
 		}
-		if err = e.settleOutcome(ctx, id, usage, estimated, modelFailureCode(callErr)); err != nil {
+		if err = e.settleOutcome(ctx, id, result.Tokens, estimated, modelFailureCode(callErr), result.Breakdown); err != nil {
 			return "", err
 		}
 		if callErr == nil {
-			return text, nil
+			return result.Text, nil
 		}
 		var modelErr *modelError
 		retry := errors.As(callErr, &modelErr) && modelErr.Retryable()
@@ -102,16 +101,20 @@ func (e execution) setPhase(ctx context.Context, phase, kind string, payload any
 }
 
 type researchState struct {
-	task          taskRow
-	config        modelConfig
-	sources       []evidence
-	failures      string
-	parentContext string
-	preferences   model.ResearchPreferences
+	task           taskRow
+	config         modelConfig
+	sources        []evidence
+	failures       string
+	parentContext  string
+	preferences    model.ResearchPreferences
+	draft          reportDraft
+	report         string
+	citations      []evidence
+	reviewFiltered bool
 }
 
 func (e execution) executeResearch(ctx context.Context, t taskRow) error {
-	_, err := Run(ctx, &researchState{task: t}, e.prepareResearch, e.collectResearch, e.synthesizeResearch)
+	_, err := Run(ctx, &researchState{task: t}, e.prepareResearch, e.collectResearch, e.synthesizeResearch, e.reviewResearch, e.publishResearch)
 	return err
 }
 
@@ -211,6 +214,12 @@ For repository layout and dependency manifests, prefer github_repo. Its optional
 fetch_page requires a public HTTP or HTTPS URL. Uploaded material is already available as evidence, so do not add a tool step for an attachment, a filename, or a local path.
 Prefer supplied official URLs and public repositories. Use web_search only when enabled; otherwise use known primary documentation or public repository names.`
 
+const learnPlanInstructions = `
+For a matching public Microsoft documentation topic, use {"step_id":"learn","tool":"microsoft_docs_search","query":"aspnet-routing","question":"Evidence needed"}.
+The only accepted query IDs are aspnet-routing (ASP.NET Core minimal API routing), dotnet-httpclient (HttpClient and connection pooling),
+azure-app-service (deploying custom containers), and wsl-containers (Windows Subsystem for Linux containers).
+Use only an exact topic ID. Use a supplied official URL for topics outside this list.`
+
 func (e execution) planRound(ctx context.Context, step *researchRound) (*researchRound, error) {
 	t, config, failures, round := step.state.task, step.state.config, step.failures, step.index
 	if round == 0 && t.approvedPlan != nil {
@@ -219,6 +228,10 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 		return step, err
 	}
 	var err error
+	instructions := planInstructions
+	if e.registry != nil && e.registry.Has("microsoft_docs_search") {
+		instructions += learnPlanInstructions
+	}
 	phase, kind := "planning", "plan_updated"
 	if round > 0 {
 		phase, kind = "replanning", "replan_started"
@@ -229,7 +242,7 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 	planText, err := e.checkpoint(ctx, fmt.Sprintf("plan-%d", round+1), func(ctx context.Context) (string, error) {
 		return e.generate(ctx, config, fmt.Sprintf(
 			"Create a technical research plan for this goal: %s. Search enabled: %t.\n%s",
-			t.goal+" Previous attempts: "+failures, os.Getenv("BRAVE_SEARCH_API_KEY") != "", planInstructions)+step.state.parentContext+sourcePreference(step.state.preferences))
+			t.goal+" Previous attempts: "+failures, os.Getenv("BRAVE_SEARCH_API_KEY") != "", instructions)+step.state.parentContext+sourcePreference(step.state.preferences))
 	})
 	if err != nil {
 		return nil, err
@@ -239,7 +252,7 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 		// Repair once within this planning round; a new checkpoint means a
 		// distinct durable model attempt, with its own budget reservation.
 		planText, err = e.checkpoint(ctx, fmt.Sprintf("plan-%d-repair", round+1), func(ctx context.Context) (string, error) {
-			return e.generate(ctx, config, fmt.Sprintf("Repair this plan. Goal: %s. Search enabled: %t. Error: %s. Invalid plan: %s\n%s", t.goal, os.Getenv("BRAVE_SEARCH_API_KEY") != "", planErr.Error(), textutil.Clip(planText, 4000), planInstructions)+step.state.parentContext+sourcePreference(step.state.preferences))
+			return e.generate(ctx, config, fmt.Sprintf("Repair this plan. Goal: %s. Search enabled: %t. Error: %s. Invalid plan: %s\n%s", t.goal, os.Getenv("BRAVE_SEARCH_API_KEY") != "", planErr.Error(), textutil.Clip(planText, 4000), instructions)+step.state.parentContext+sourcePreference(step.state.preferences))
 		})
 		if err != nil {
 			return nil, err
@@ -272,53 +285,6 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 		return nil, errPlanReviewPending
 	}
 	step.plan, step.failures = plan, failures
-	return step, nil
-}
-
-func (e execution) executeRound(ctx context.Context, step *researchRound) (*researchRound, error) {
-	if step.skip {
-		return step, nil
-	}
-	t, failures, round, plan, sources := step.state.task, step.failures, step.index, step.plan, step.sources
-	var err error
-	if err = e.setPhase(ctx, "executing", "task_status", map[string]string{"status": "RUNNING", "phase": "executing"}); err != nil {
-		return nil, err
-	}
-	roundFailures := 0
-	completed := map[string]bool{}
-	for _, planStep := range plan.Steps {
-		if planStep.Tool != "fetch_page" && planStep.Tool != "github_repo" && planStep.Tool != "web_search" {
-			return nil, errors.New("invalid_plan_tool")
-		}
-		key := fmt.Sprintf("tool-%d-%s", round+1, planStep.ID)
-		saved, err := e.checkpoint(ctx, key, func(ctx context.Context) (string, error) {
-			for _, dependency := range planStep.Dependencies {
-				if !completed[dependency] {
-					return "{\"error\":\"dependency_failed\"}", nil
-				}
-			}
-			collected, collectErr := e.registry.Execute(researchtools.WithEvidenceGoal(ctx, t.goal+" "+planStep.Question+" "+failures), planStep.Input)
-			if collectErr != nil {
-				raw, _ := json.Marshal(map[string]string{"error": collectErr.Error()})
-				return string(raw), nil
-			}
-			raw, err := json.Marshal(collected)
-			return string(raw), err
-		})
-		if err != nil {
-			return nil, err
-		}
-		var evidenceSet []evidence
-		if json.Unmarshal([]byte(saved), &evidenceSet) == nil && len(evidenceSet) > 0 {
-			completed[planStep.ID] = true
-			sources = append(sources, evidenceSet...)
-		} else {
-			failures += textutil.Clip(saved, 256) + " "
-			roundFailures++
-		}
-	}
-
-	step.sources, step.failures, step.roundFailures = sources, failures, roundFailures
 	return step, nil
 }
 
@@ -415,8 +381,17 @@ func (e execution) synthesizeResearch(ctx context.Context, state *researchState)
 	if err != nil {
 		return nil, err
 	}
-	err = e.mutate(ctx, func(tx *repository.ExecutionTx, current taskRow) error {
-		return finishReport(ctx, tx, e.delivery, current, report, "research", citations)
+	state.draft, state.report, state.citations = draft, report, citations
+	return state, nil
+}
+
+func (e execution) publishResearch(ctx context.Context, state *researchState) (*researchState, error) {
+	kind, status, code := "research", "SUCCEEDED", ""
+	if state.reviewFiltered {
+		kind, status, code = "partial", "PARTIAL", "citation_review_filtered"
+	}
+	err := e.mutate(ctx, func(tx *repository.ExecutionTx, current taskRow) error {
+		return saveFinalReport(ctx, tx, e.delivery, current, state.report, kind, status, code, state.citations)
 	})
 	return state, err
 }

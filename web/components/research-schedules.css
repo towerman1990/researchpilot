@@ -1,0 +1,45 @@
+.research-schedules {
+  display: grid;
+  gap: 14px;
+}
+
+.research-schedules h1 {
+  margin: 0;
+}
+
+.schedule-form,
+.schedule-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.schedule-form > button {
+  justify-self: start;
+}
+
+.schedule-fields {
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+
+.schedule-form > label:not(.ant-checkbox-wrapper),
+.schedule-fields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.schedule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.schedule-list li {
+  padding: 12px 0;
+  border-bottom: 1px solid #e8edf5;
+  overflow-wrap: anywhere;
+}
+
+.schedule-list li:last-child {
+  border-bottom: 0;
+}

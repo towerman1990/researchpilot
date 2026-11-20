@@ -139,7 +139,7 @@
   .workspace:has(.report-content) :is(
     .sidebar, .topbar, .error-notice, .detail-meta, .detail-side,
     .detail-top .page-kicker, .detail-top .status, .report-card .ant-card-head,
-    .parent-report-link, .report-follow-up
+    .parent-report-link, .report-follow-up, .task-log-id
   ) {
     display: none !important;
   }
@@ -183,4 +183,9 @@
     max-height: 220mm;
     object-fit: contain;
   }
+}
+.task-log-id {
+  margin: 0 0 14px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
 }

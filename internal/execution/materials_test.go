@@ -34,20 +34,20 @@ func TestUploadedMaterialsIntegration(t *testing.T) {
 
 	const key, goal = "material-test-key", "Summarize the retention policy in the attached note."
 	file := taskservice.Material{Name: "policy.md", Content: "The fixture retention period is 30 days."}
-	created, err := actions.Submit(ctx, owner.Tenant, key, goal, "", false, file)
+	created, err := actions.Submit(ctx, owner.Tenant, key, goal, "", taskservice.SubmitOptions{}, file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := actions.Submit(ctx, owner.Tenant, key, goal, "", false, file)
+	replay, err := actions.Submit(ctx, owner.Tenant, key, goal, "", taskservice.SubmitOptions{}, file)
 	if err != nil || replay.ID != created.ID {
 		t.Fatalf("matching upload did not replay its task: %v", err)
 	}
 	changed := file
 	changed.Content += " Changed."
-	if _, err := actions.Submit(ctx, owner.Tenant, key, goal, "", false, changed); !errors.Is(err, taskservice.ErrIdempotencyConflict) {
+	if _, err := actions.Submit(ctx, owner.Tenant, key, goal, "", taskservice.SubmitOptions{}, changed); !errors.Is(err, taskservice.ErrIdempotencyConflict) {
 		t.Fatalf("changed material accepted with the same key: %v", err)
 	}
-	if _, err := actions.Submit(ctx, owner.Tenant, "invalid-material", goal, "", false, taskservice.Material{Name: "file.exe", Content: "invalid"}); !errors.Is(err, taskservice.ErrInvalidMaterials) {
+	if _, err := actions.Submit(ctx, owner.Tenant, "invalid-material", goal, "", taskservice.SubmitOptions{}, taskservice.Material{Name: "file.exe", Content: "invalid"}); !errors.Is(err, taskservice.ErrInvalidMaterials) {
 		t.Fatalf("invalid file accepted: %v", err)
 	}
 	sources, err := store.UploadedSources(ctx, owner.Tenant, created.ID)

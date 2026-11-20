@@ -6,6 +6,7 @@ x-app-env: &app-env
   MODEL_MASTER_KEY_FILE: /run/secrets/model_master_key
   MODEL_ALLOWED_HOSTS: ${MODEL_ALLOWED_HOSTS:-api.deepseek.com,api.openai.com}
   BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+  MICROSOFT_LEARN_MCP_ENABLED: ${MICROSOFT_LEARN_MCP_ENABLED:-false}
   GITHUB_READ_TOKEN: ${GITHUB_READ_TOKEN:-}
 x-app: &app
   image: ${RESEARCHPILOT_IMAGE:?set RESEARCHPILOT_IMAGE}
