@@ -201,6 +201,16 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 	return state, nil
 }
 
+const planInstructions = `Return only a JSON object with one top-level key, "steps", containing 1–4 steps.
+Each step uses exactly one of these tool shapes:
+{"step_id":"source","tool":"fetch_page","url":"https://example.com/docs","question":"Relevant section"}
+{"step_id":"repo","tool":"github_repo","owner":"owner","repo":"repo","path":"apps/desktop","question":"go.mod declared dependencies"}
+{"step_id":"search","tool":"web_search","query":"official documentation","question":"Relevant API"}
+Use unique step IDs and precise evidence questions. Optional fields "depends_on" (an array of earlier step IDs) and "success_condition" belong inside a step. Omit dependencies for independent steps.
+For repository layout and dependency manifests, prefer github_repo. Its optional path must be a directory within the repository, never a filename or URL. Read a given directory once.
+fetch_page requires a public HTTP or HTTPS URL. Uploaded material is already available as evidence, so do not add a tool step for an attachment, a filename, or a local path.
+Prefer supplied official URLs and public repositories. Use web_search only when enabled; otherwise use known primary documentation or public repository names.`
+
 func (e execution) planRound(ctx context.Context, step *researchRound) (*researchRound, error) {
 	t, config, failures, round := step.state.task, step.state.config, step.failures, step.index
 	if round == 0 && t.approvedPlan != nil {
@@ -218,8 +228,8 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 	}
 	planText, err := e.checkpoint(ctx, fmt.Sprintf("plan-%d", round+1), func(ctx context.Context) (string, error) {
 		return e.generate(ctx, config, fmt.Sprintf(
-			"Create a technical research plan for this goal: %s. Return JSON {\"steps\":[{\"tool\":\"fetch_page\",\"url\":\"https://...\"}]}. Use 1-4 steps. Tools: fetch_page(url), github_repo(owner,repo,optional path), web_search(query). Search available: %v. Prefer user-provided official URLs and public GitHub repositories. Use github_repo for repository layout and declared dependencies, setting path to a repository-relative directory when the goal names a specific module. If search is unavailable choose known primary documentation URLs or public repository names; failed URLs will be recorded. Never request private addresses. Include step_id and question (precise English API names or document-section keywords for evidence extraction). Optional step fields: depends_on (existing step IDs), success_condition. Dependencies must form an acyclic graph.",
-			t.goal+" Previous attempts: "+failures, os.Getenv("BRAVE_SEARCH_API_KEY") != "")+step.state.parentContext+sourcePreference(step.state.preferences))
+			"Create a technical research plan for this goal: %s. Search enabled: %t.\n%s",
+			t.goal+" Previous attempts: "+failures, os.Getenv("BRAVE_SEARCH_API_KEY") != "", planInstructions)+step.state.parentContext+sourcePreference(step.state.preferences))
 	})
 	if err != nil {
 		return nil, err
@@ -229,7 +239,7 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 		// Repair once within this planning round; a new checkpoint means a
 		// distinct durable model attempt, with its own budget reservation.
 		planText, err = e.checkpoint(ctx, fmt.Sprintf("plan-%d-repair", round+1), func(ctx context.Context) (string, error) {
-			return e.generate(ctx, config, fmt.Sprintf("Repair this plan. Goal: %s. Return only JSON with steps (1-4). Valid tools: fetch_page(url), github_repo(owner,repo,optional path), web_search(query). No other fields. Error: %s. Invalid plan: %s", t.goal, planErr.Error(), textutil.Clip(planText, 4000))+step.state.parentContext+sourcePreference(step.state.preferences))
+			return e.generate(ctx, config, fmt.Sprintf("Repair this plan. Goal: %s. Search enabled: %t. Error: %s. Invalid plan: %s\n%s", t.goal, os.Getenv("BRAVE_SEARCH_API_KEY") != "", planErr.Error(), textutil.Clip(planText, 4000), planInstructions)+step.state.parentContext+sourcePreference(step.state.preferences))
 		})
 		if err != nil {
 			return nil, err
