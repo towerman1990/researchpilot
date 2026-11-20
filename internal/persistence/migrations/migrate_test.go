@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"researchpilot/internal/common/identity"
 	"researchpilot/internal/persistence"
 )
 
@@ -41,6 +40,8 @@ func TestMigrationsIntegration(t *testing.T) {
 	if dir == "" {
 		dir = filepath.Join("..", "..", "..", "migrations")
 	}
+	const tenant = "00000000000000000000000000000001"
+	const task = "00000000000000000000000000000002"
 	// Reproduce a populated M1 volume with no migration ledger.
 	var exists int
 	if err := db.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='users'").Scan(&exists); err != nil {
@@ -58,7 +59,6 @@ func TestMigrationsIntegration(t *testing.T) {
 				}
 			}
 		}
-		tenant, task := identity.New(16), identity.New(16)
 		if _, err = db.Exec("INSERT INTO users VALUES(?,?,?)", tenant, tenant+"@example.test", "unused"); err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +77,7 @@ func TestMigrationsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var legacy string
-	if err := db.QueryRow("SELECT markdown FROM research_reports WHERE kind='demo' LIMIT 1").Scan(&legacy); err != nil || legacy != "legacy report" {
+	if err := db.QueryRow("SELECT markdown FROM research_reports WHERE tenant_id=? AND task_id=? AND kind='demo'", tenant, task).Scan(&legacy); err != nil || legacy != "legacy report" {
 		t.Fatalf("legacy report lost: %v", err)
 	}
 	var count int
