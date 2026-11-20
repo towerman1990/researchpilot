@@ -14,7 +14,7 @@
 
 ## 桌面壳比较
 
-用户已确认 MyGo 指 egoist/mygo。本轮以官方发布的 0.10.0 与 Tauri 2 作对比，ADR 005 在两个 Windows 原型验收后确定。[MyGo 发布记录](https://github.com/egoist/mygo/releases/tag/v0.10.0)。
+用户已确认 MyGo 指 egoist/mygo。本轮以官方发布的 0.10.0 与 Tauri 2 作对比，ADR 005 已根据两个 Windows 原型的实测结果确定。[MyGo 发布记录](https://github.com/egoist/mygo/releases/tag/v0.10.0)。
 
 | 维度 | Tauri 2 | egoist/mygo |
 |---|---|---|
@@ -30,7 +30,7 @@
 | 权限 | 按窗口、命令和来源配置 capabilities，首版远程工作台不授予原生 IPC | 提供类型化 Go/TS IPC，首版远程工作台不注册绑定，并验证导航到外链时的隔离 |
 | 发布维护 | 安装和签名链路较清晰，团队增加 Rust 工具链 | Go 壳符合现有技术栈，需要实测 NSIS、签名、卸载保留数据和更新回退 |
 
-建议各做一个 Windows x64 原型。若 MyGo 在相同用例中验证安装、登录及独立会话、跨端历史、SSE 断线恢复、外链、报告导出与卸载，可优先考虑 MyGo，以减少长期维护的语言栈。签名、安装和权限隔离的实测结果决定最终选型。首版桌面壳使用同一个 HTTPS 工作台，Web 与桌面分别登录同一账号，并共享服务端数据。
+首版桌面壳使用同一个 HTTPS 工作台。Web 与桌面分别登录同一个账号，并共享服务端数据。Windows 对照结果、构建、安装与升级说明见 [M4 桌面验收](13-M3-DESKTOP.md)。
 
 [Tauri 权限](https://v2.tauri.app/security/capabilities/) · [Tauri Windows 安装器](https://v2.tauri.app/distribute/windows-installer/) · [MyGo 架构](https://mygo.run/docs/architecture) · [MyGo 分发](https://mygo.run/docs/distribution)
 
@@ -42,11 +42,11 @@
 | 002 | 已确认：通用 OpenAI-compatible 接口 | 能力矩阵和适配器契约测试成为必需。 |
 | 003 | 继承：MySQL 持久状态、Asynq 调度、SSE 推送；outbox 与 fencing 机制为本稿提案 | 需故障注入验证；未来可替换队列。 |
 | 004 | 用户决定：Hertz | Hertz 原生路由已完成本地 SSE、认证和任务取消回归。 |
-| 005 | 已确认双端；共享 React 为基线；Tauri / MyGo 待定 | 桌面权限和分发验收通过后更新 ADR。 |
+| 005 | 已确定 Windows 首版采用 egoist/mygo v0.10.0，共用 React 工作台 | 两个原型均通过安装、登录、历史、SSE 重连和下载。MyGo 原型同时通过用户主动打开外链的验收。签名与覆盖升级作为公开分发验收项。 |
 | 006 | 待评审：P0 自动执行，P1 审批 | 首版减少人工阻塞；计划版本为后续审批预留。 |
 
 ## 明确待决项
 
-- 工程验证后关闭 ADR 004、005。明确 Windows 发布方式。本稿将 macOS 构建验证放在 M0，正式分发暂列 P1。
+- ADR 004 与 005 已确定，Windows 首版采用当前用户 NSIS 安装器。本稿将 macOS 构建验证放在 M0，正式分发暂列 P1。
 - 产品评审 P0 是否需要一次点击确认计划，以及正式预算、留存与证据覆盖阈值。
 - 部署方选定搜索供应商、默认模型与允许域，确认签名与密钥管理方式。

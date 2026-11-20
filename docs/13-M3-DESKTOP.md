@@ -1,57 +1,82 @@
-# M4 Windows 桌面原型：MyGo
+# M4 Windows 桌面验收与发布
 
-## 当前结论
+## 首版选型
 
-用户已确认 MyGo 指 egoist/mygo。已在 Windows amd64 上固定 MyGo v0.10.0，使用现有 ResearchPilot HTTPS Web 工作台作为桌面窗口内容。原型 Go 测试通过，`ResearchPilot.exe` 与 Windows NSIS 安装器均已成功构建。
+选定 egoist/mygo v0.10.0 作为 Windows amd64 首版桌面壳。MyGo 与 Tauri 2.12.7 都通过了 Windows 安装、独立登录、跨端历史、SSE 断线重连和 Markdown 下载。两者的原型均拦截脚本弹窗。MyGo 能将用户主动点击的站外 HTTP(S) 链接交给系统浏览器，当前 Tauri 原型会拦截这类链接。MyGo 已通过同一组用例，并沿用项目现有的 Go 工具链。
 
-本结论仍属候选方案，ADR 005 尚未冻结。当前原型验证了编译、打包与 URL 安全策略。真实部署登录、跨端历史、SSE 断线恢复、报告导出、安装卸载和 Tauri 同用例比较仍需验收。
+## 客户端边界
 
-## 设计边界
+- 应用默认打开 `https://researchpilot.towerman1990.cn/`。桌面和浏览器分别登录同一账号，任务历史和报告由服务端共享。
+- 窗口内仅允许同源导航。用户主动点击的站外 HTTP(S) 链接由系统浏览器打开。脚本弹窗和其他协议由应用拦截。
+- 桌面壳关闭生产 DevTools，应用配置不向页面授予原生调用权限。
+- 本地联调可使用 `RESEARCHPILOT_DESKTOP_URL=http://localhost:8080/`。自定义地址须为 HTTPS，或本机回环 HTTP。地址不得携带凭据、查询或片段。
 
-- Go 只负责窗口和导航策略，前端由部署中的 `web/` 应用提供。桌面端与浏览器共享同一服务端账号、任务和报告。
-- WebView 使用自己的持久会话存储，浏览器首次登录互不共享。桌面端首次需要单独登录。
-- 不注册 Go IPC，不绑定原生服务，不向网页授予 MyGo 的原生调用权限。
-- 默认起始地址为 `https://researchpilot.towerman1990.cn/`。测试环境可设置 `RESEARCHPILOT_DESKTOP_URL`；仅允许 HTTPS，或用于本机开发的 localhost HTTP。地址不得携带用户信息、查询参数或片段。
-- 站内导航要求 scheme 和 host 与起始地址完全相同。站外网页导航被取消，只有用户主动点击的 HTTP(S) 链接才交由系统浏览器打开。脚本弹窗和非 Web 协议均拒绝。
-- 生产构建关闭 DevTools。安装器当前未签名，不能视为正式面向公众的发布物；Windows SmartScreen 和签名证书仍待产品发布决策。
+## Windows 验收记录
 
-## 本地构建
+两套客户端均连接同一个本地真实 ResearchPilot 后端，使用独立 WebView2 配置和验收账号。浏览器侧先创建任务，桌面端登录后读取既有报告。桌面端再创建任务，验收时断开实际 SSE 连接并观察重新订阅，恢复 Worker 后检查终态。下载文件逐字节比对同一任务的服务端 Markdown。
 
-从 `apps/desktop` 执行：
+| 场景 | MyGo v0.10.0 | Tauri 2.12.7 |
+| --- | --- | --- |
+| Windows x64 构建、WebView2 启动 | 通过 | 通过，Rust 1.90.0 MSVC |
+| 独立登录和跨端历史 | 通过 | 通过 |
+| 实际断开 SSE 后重连并看到完整报告 | 通过 | 通过 |
+| 下载 Markdown，内容与 API 一致 | 通过 | 通过 |
+| 脚本弹窗拦截 | 通过 | 通过 |
+| 用户主动点击外链后打开系统浏览器 | 通过 | 当前原型拦截 |
+| 当前用户 NSIS 安装和卸载 | 通过 | 通过，已安装程序跑完同场景 |
+
+## 构建、安装和升级
+
+在 `apps/desktop` 中运行：
 
 ~~~powershell
 go test ./...
 go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build -platform windows/amd64
 ~~~
 
-已验证输出：`build/windows-amd64/ResearchPilot.exe` 和 `build/windows-amd64/researchpilot-setup-0.1.0-amd64.exe`。安装器由 MyGo 使用 NSIS 构建。正式构建和安装检查应使用 MyGo CLI 固定版本，不使用 `@latest`。
+产物是 `build/windows-amd64/ResearchPilot.exe` 和 `build/windows-amd64/researchpilot-setup-0.1.2-amd64.exe`。运行安装器即可为当前 Windows 用户安装。Windows 上需要可用的 WebView2 Runtime。首次启动后用已有 ResearchPilot 账号登录。
 
-开发后端可在本机 HTTP 模式运行：
+首版采用手动升级。关闭已运行的客户端，核对新版安装器的版本和 SHA-256，然后运行新版安装器。升级构建沿用 `mygo.json` 的应用标识 `cn.towerman1990.researchpilot` 并递增版本。用户凭据和研究数据由服务器管理。覆盖升级已通过独立安装标识下的 `0.1.0 → 0.1.1` 验收。升级沿用原安装目录，替换了程序并保持 WebView2 的本地状态和持久 Cookie。卸载测试副本后，WebView2 测试配置目录仍存在，已有 ResearchPilot 安装的版本、路径和程序哈希均一致。
+
+Windows x64 验收包 `0.1.2` 将 `apps/desktop/assets/researchpilot-icon.png` 打入应用、安装器和卸载器。安装时可在完成页创建桌面快捷方式，Windows 从已安装程序读取图标。验收包未签名，安装器 SHA-256 为 `ed43d6fe59ae058afbf521f62b8b49d6f85838ae11a11df6727d4cb6087d751b`。
+
+## 正式签名与发布前验证
+
+本机已通过 MyGo 的签名流程验收。临时证书写入了安装器、应用和卸载器三处 Authenticode 签名，证书及私钥随后删除。正式构建需使用可访问私钥的可信代码签名证书，并由 HTTPS RFC 3161 端点加盖时间戳。[Microsoft SignTool 指南](https://learn.microsoft.com/windows/win32/seccrypto/signtool)。
+
+### 申请发布者签名
+
+首次公开发行需要一个经验证的发布者身份。以个人身份申请时，先向代码签名服务商确认居住国家或地区、可用证件、签名显示名称和最终费用。SSL.com 提供个人验证（IV）代码签名，支持 USB 硬件令牌与 eSigner。USB 令牌和可接入 Windows 证书存储的云签名客户端可沿用下方 SignTool 流程。[SSL.com 代码签名产品](https://www.ssl.com/products/software-integrity/code-signing/) · [eSigner Windows Key Adapter](https://www.ssl.com/how-to/how-to-install-ssl-com-esigner-cloud-key-adapter-cka/)。
+
+Microsoft Azure Artifact Signing 的个人公开信任验证限美国和加拿大。SignPath Foundation 的免费开源签名要求项目已经发布过所申请的产物形式。[Azure 资格说明](https://learn.microsoft.com/azure/artifact-signing/quickstart) · [SignPath 条件](https://signpath.org/terms)。
+
+签名服务商审核通过后，在 Windows 发布机安装令牌驱动或云签名客户端，并按供应商说明登录或插入令牌。当前用户可用的证书可用以下命令确认，证书指纹和供应商的 HTTPS RFC 3161 时间戳地址用于下方构建。证件、账号认证信息及私钥由发布者在签名服务中管理。
 
 ~~~powershell
-$env:RESEARCHPILOT_DESKTOP_URL = 'http://localhost:8080/'
+Get-ChildItem Cert:/CurrentUser/My -CodeSigningCert |
+    Select-Object Subject, Thumbprint, NotAfter, HasPrivateKey
 ~~~
 
-关闭终端后此环境变量不保留。生产默认地址仍为 HTTPS 域名。不要把凭据放进桌面 URL 或命令参数。
 
-## M4 桌面验收表
+发布者证书已由 Windows 识别后，在仓库根目录执行以下命令。证书指纹可配置到发布工作站，私钥始终由证书存储或硬件提供。
 
-| 项目 | 状态 | 通过条件 |
-| --- | --- | --- |
-| Go 单元测试 | 已通过 | 拒绝公网 HTTP、URL 凭据、查询和片段；区分同源与域名相似的站外 URL |
-| Windows amd64 EXE | 已构建 | MyGo v0.10.0 生成独立可运行文件 |
-| NSIS 安装包 | 已构建 | MyGo v0.10.0 生成当前用户安装器 |
-| 运行及 WebView2 | 待验 | Windows 启动、缺运行时提示、窗口尺寸及状态恢复 |
-| 登录与跨端数据 | 待验 | 桌面独立登录后看到同一账号的任务、报告；浏览器端新建的任务可同步查看 |
-| SSE 重连 | 待验 | 中断网络后自动恢复且事件不重复或丢失 |
-| 外链和弹窗 | 待验 | 点击站外 HTTP(S) 链接打开系统浏览器；脚本弹窗、伪造相似域名及非 Web scheme 被拦截 |
-| 报告导出 | 待验 | 报告在桌面端可读取、复制或下载，文件内容完整 |
-| 安装卸载 | 待验 | 当前用户无管理员权限安装，卸载后不误删用户数据 |
-| Tauri 对照 | 待验 | 对同一 Web 窗口、登录、SSE、外链、安装卸载和权限边界执行同组检查 |
-| 代码签名 | 未配置 | 发布给普通用户前签名 EXE、安装器与卸载器并验证签名状态 |
+~~~powershell
+$ErrorActionPreference = 'Stop'
+$env:RESEARCHPILOT_SIGNING_THUMBPRINT = '<证书指纹>'
+$env:RESEARCHPILOT_SIGNING_TIMESTAMP_URL = '<HTTPS RFC 3161 地址>'
+# 证书在本机存储时设为 LocalMachine，默认 CurrentUser。
+$env:RESEARCHPILOT_SIGNING_STORE = 'CurrentUser'
 
-## 桌面壳决策
+$signer = (Resolve-Path 'apps/desktop/sign-windows.ps1').Path
+$stage = New-Item -ItemType Directory '.cache/desktop-signed-0.1.2'
+Copy-Item -LiteralPath @('apps/desktop/main.go','apps/desktop/go.mod','apps/desktop/go.sum') -Destination $stage.FullName
+Copy-Item -LiteralPath 'apps/desktop/assets' -Destination $stage.FullName -Recurse
+$config = Get-Content 'apps/desktop/mygo.json' -Raw | ConvertFrom-Json -AsHashtable
+if (!$config.windows) { $config.windows = @{} }
+$config.windows.signCommand = ('pwsh.exe -NoProfile -File "' + $signer + '" %1')
+$config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $stage.FullName 'mygo.json') -Encoding utf8
+go run github.com/egoist/mygo/cmd/mygo@v0.10.0 build -platform windows/amd64 $stage.FullName
+if ($LASTEXITCODE -ne 0) { throw 'Windows signed build failed.' }
+~~~
 
-MyGo v0.10.0 的 Windows 安装器已在当前 Windows amd64 工作站成功生成，符合团队现有 Go 技术栈，也不需要为了共享 Web UI 重写 React。Tauri 2 的 Rust/C++ 构建与权限能力已有文档比较，但本轮没有编译 Tauri 原型。因此目前不宣布 MyGo 全面对比胜出。ADR 005 待真实桌面验收完成后再决定。
-
-官方参考：[MyGo 0.10.0](https://github.com/egoist/mygo/releases/tag/v0.10.0) · [快速开始](https://mygo.run/docs/getting-started) · [前端与信任边界](https://mygo.run/docs/frontend) · [Windows 分发与签名](https://mygo.run/docs/distribution) · [Tauri 权限](https://v2.tauri.app/security/capabilities/) · [Tauri Windows 安装器](https://v2.tauri.app/distribute/windows-installer/)
+MyGo 会为三处可执行文件调用同一个签名脚本。构建后在干净的 Windows 环境中检查安装器的发布者提示，安装后分别核对应用和卸载器的签名与时间戳，并记录安装包 SHA-256。签名有效与 SmartScreen 的信誉判断需分别验证。[Microsoft Windows 签名说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)。
