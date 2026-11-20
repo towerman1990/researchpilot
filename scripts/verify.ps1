@@ -20,8 +20,11 @@ try {
     if($LASTEXITCODE){throw 'Frontend build failed'}
     $env:GOOS='linux'
     $env:CGO_ENABLED='0'
-    go test -c -o .cache/m2-integration ./cmd/researchpilot
-    if($LASTEXITCODE){throw 'Integration build failed'}
+    foreach($package in @('persistence/migrations','persistence','service','execution')) {
+        $name = Split-Path $package -Leaf
+        go test -c -o ".cache/$name-integration" "./internal/$package"
+        if($LASTEXITCODE){throw "Integration build failed for $package"}
+    }
     wsl -d $Distribution -u root -- bash scripts/verify-wsl.sh
     if($LASTEXITCODE){throw 'Database integration tests failed'}
 } finally {

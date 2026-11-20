@@ -2,22 +2,24 @@ package tools
 
 import "testing"
 
-func TestPlanSchema(t *testing.T) {
-	valid := `{"steps":[{"tool":"fetch_page","url":"https://go.dev/doc/"},{"tool":"github_repo","owner":"golang","repo":"go"}]}`
-	if steps, err := ParsePlan(valid); err != nil || len(steps) != 2 {
-		t.Fatal(steps, err)
-	}
-	for _, raw := range []string{
-		`{"steps":[]}`,
-		`{"steps":[{"tool":"shell","query":"rm"}]}`,
-		`{"steps":[{"tool":"fetch_page","url":"https://go.dev","command":"ls"}]}`,
-		`{"steps":[{"tool":"fetch_page","url":"https://go.dev","query":"extra"}]}`,
-		`{"steps":[{"tool":"github_repo","owner":"..","repo":"go"}]}`,
-		`{"steps":[{"tool":"web_search","query":"  "}]}`,
-		valid + `{}`,
+func TestInputValidate(t *testing.T) {
+	for _, input := range []Input{
+		{Tool: "fetch_page", URL: "https://go.dev/doc/"},
+		{Tool: "github_repo", Owner: "golang", Repo: "go"},
+		{Tool: "web_search", Query: "Go official"},
 	} {
-		if _, err := ParsePlan(raw); err == nil {
-			t.Fatal("invalid plan accepted", raw)
+		if err := input.Validate(); err != nil {
+			t.Errorf("valid input %+v: %v", input, err)
+		}
+	}
+	for _, input := range []Input{
+		{Tool: "shell", Query: "rm"},
+		{Tool: "fetch_page", URL: "https://go.dev", Query: "extra"},
+		{Tool: "github_repo", Owner: "..", Repo: "go"},
+		{Tool: "web_search", Query: "  "},
+	} {
+		if err := input.Validate(); err == nil {
+			t.Errorf("invalid input accepted: %+v", input)
 		}
 	}
 }

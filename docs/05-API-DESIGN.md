@@ -5,7 +5,8 @@
 | POST /auth/register、/auth/login、/auth/refresh、/auth/logout | 注册登录、刷新轮换、撤销，Web 用安全 Cookie，桌面采用平台会话适配。 |
 | GET / POST /conversations | 游标列表或创建会话。P0 用于任务归组。 |
 | POST /research/tasks | body 含 goal、conversation_id、可选约束；Idempotency-Key 必需。返回 202、task_id 和状态 URL，异体同键 409。 |
-| GET /research/tasks、GET /research/tasks/{id} | 租户历史游标及任务快照，返回状态、phase、revision、最新 event_seq。 |
+| GET /research/tasks | 返回当前租户的任务数组，每页最多 50 条，按创建时间和任务 ID 降序排列。有更早的记录时，响应头 `X-Next-Cursor` 提供下一页的 `before` 值。 |
+| GET /research/tasks/{id} | 获取任务快照，包括状态、阶段和最新事件序号。 |
 | GET /research/tasks/{id}/events | SSE，按 Last-Event-ID 回放，也接受 after 用于初始连接。 |
 | POST /research/tasks/{id}/cancel | 202 表示已受理；重复取消返回当前状态，其他终态冲突 409。 |
 | GET /research/tasks/{id}/report、/research/tasks/{id}/sources/{source_id} | 获取报告及支撑证据；报告尚未生成时返回 409 和状态。 |

@@ -71,7 +71,7 @@ jobs:
           MODEL_MASTER_KEY_FILE: ${{ runner.temp }}/model-master.key
           MIGRATIONS_DIR: ${{ github.workspace }}/migrations
         run: |
-          go test -race -count=1 -timeout=2m ./cmd/researchpilot -run '^TestMigrationsIntegration$' -v
+          go test -race -count=1 -timeout=2m ./internal/persistence/migrations -run '^TestMigrationsIntegration$' -v
           go test -race -count=1 -timeout=3m ./... -v
       - name: Remove ephemeral key
         if: always()
@@ -141,3 +141,13 @@ jobs:
         run: |
           docker compose down --volumes --remove-orphans
           rm -f .cache/model-master.key
+
+  production-smoke:
+    name: Production Compose smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: bash scripts/smoke-production.sh

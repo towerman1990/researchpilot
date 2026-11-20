@@ -9,6 +9,9 @@ func TestDependencyPlan(t *testing.T) {
 		t.Fatal(plan, err)
 	}
 	for _, raw := range []string{
+		`{"steps":[]}`,
+		`{"steps":[{"tool":"fetch_page","url":"https://go.dev","command":"ls"}]}`,
+		`{"steps":[{"tool":"fetch_page","url":"https://go.dev"}]}{}`,
 		`{"steps":[{"step_id":"a","tool":"fetch_page","url":"https://go.dev","depends_on":["a"]}]}`,
 		`{"steps":[{"step_id":"a","tool":"fetch_page","url":"https://go.dev","depends_on":["missing"]}]}`,
 		`{"steps":[{"step_id":"a","tool":"fetch_page","url":"https://go.dev"},{"step_id":"a","tool":"web_search","query":"go"}]}`,

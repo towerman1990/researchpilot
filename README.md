@@ -1,6 +1,6 @@
 # ResearchPilot
 
-ResearchPilot 是一个本地技术研究工作台。你可以注册、登录、提交研究目标、查看任务历史，并通过 SSE 实时跟踪进度。M1 演示路径可用。M2 已实现模型驱动的研究、证据引用、任务取消和恢复重试，完整验收仍在进行。详见 [M2 实施记录](docs/09-M2-IMPLEMENTATION.md)。
+ResearchPilot 是一个本地技术研究工作台。你可以注册、登录、提交研究目标、查看任务历史，并通过 SSE 实时跟踪进度。M1 演示路径可用。M2 已实现模型驱动的研究、证据引用、任务取消和恢复重试，完整验收仍在进行。
 
 ## 启动
 
@@ -40,7 +40,8 @@ pwsh -File ./scripts/smoke.ps1
 
 ## 项目现状
 
-- API 使用 Go 标准库 `net/http`，Gin 与 Hertz 的选型仍待定。API 与 Worker 分进程运行。
+- 程序入口在 `cmd/researchpilot`，依赖由 `internal/wiring` 装配，`internal/app` 管理进程启动和关闭。
+- `internal/handler` 提供 Hertz API，`internal/task` 管理任务，`internal/execution` 运行研究流程并通过 Eino 编排各阶段。任务执行的 MySQL 查询与事务由 `internal/repository` 管理，网页抓取、搜索和 GitHub 工具实现在 `internal/tools/research`。API 与 Worker 分进程运行。
 - M1 迁移使用 32 字符的随机十六进制 ID，每个用户独占一个个人租户。身份使用 bcrypt 与 8 小时的 HttpOnly 会话 Cookie。Web 与 API 同源。
 - 真实模型十题评估、完整流式能力探测、限流、事件过期恢复与清理、桌面客户端仍待完成。当前配置面向本地开发。
 
@@ -61,7 +62,7 @@ npm --prefix web run build
 
 - [技术文档索引](docs/README.md)
 - [M2 设计](docs/08-M2-DESIGN.md)与 [M2 实施和验证记录](docs/09-M2-IMPLEMENTATION.md)
-- [Codex 跨设备协作指南](AGENTS.md)与 [当前项目进度](context/current-progress.md)
+- [Codex 跨设备协作指南](AGENTS.md)
 
 ## 持续集成
 

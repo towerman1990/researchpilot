@@ -98,3 +98,9 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml -f deploy/compose.n
 - 切换前备份服务器数据库 `/opt/researchpilot/backups/before-proxy-743b4ff.sql.gz`，旧镜像与配置保存在 `/opt/researchpilot/releases/before-proxy-743b4ff/`。
 - 线上两次伪造转发 IP 的登录请求计入同一个来源额度；隔离代理测试验证请求头被覆盖。新版本独立账号通过 HTTPS 登录、试用额度、真实研究、SSE 和报告检查。
 - 账号试用次数不阻止重复注册；浏览器自动 SSE 重连、生产数据恢复切换及旧镜像完整研究回退仍需在受控窗口演练。隔离恢复演练已验证报告、加密模型配置、任务重新入队及 Worker 完成演示任务。
+
+## 就绪与队列检查
+
+- `/healthz` 检查 API 能否访问 MySQL。`/readyz` 还检查 Redis，适合发布时确认服务就绪。
+- `/queuez` 在当前派发代次存在等待至少 120 秒的排队任务时返回 503。空队列只能说明当前没有积压，发布仍须通过任务完成验收。
+- CI 的生产 Compose 冒烟测试通过 Caddy 提交演示任务并读取 SSE 与报告，随后启用试用覆盖配置，验证密钥在 API 进程可读以及试用额度可查询。

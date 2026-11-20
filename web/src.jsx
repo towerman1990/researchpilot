@@ -1,9 +1,10 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
+import {AuthView, Workspace} from './components/Workspace.jsx';
+import 'antd/dist/reset.css';
 import './style.css';
-import {applyTaskEvent, mergeEvent, terminal} from './events.js';
+import {applyTaskEvent, mergeEvent, mergeTaskSnapshot, terminal} from './events.js';
 
-const labels = {QUEUED:'等待派发',RUNNING:'执行中',RETRY_WAIT:'等待重试',CANCELLING:'取消中',CANCELLED:'已取消',PARTIAL:'部分完成',SUCCEEDED:'已完成',FAILED:'执行失败'};
 const path = '/api/v1/research/tasks';
 function newRequestID() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -31,22 +32,59 @@ const errors = {
   trial_unavailable:'免费试用服务暂不可用，请稍后重试或配置自己的 API Key。',
   model_configuration_revoked:'模型密钥已撤销，请重新配置。',
   authentication_required:'会话已过期，请重新登录。',
+  invalid_history_cursor:'历史记录分页位置无效，请刷新后重试。',
 };
 
+class APIError extends Error {
+  constructor(status, code) {
+    super(errors[code] || (status >= 500 ? '服务暂不可用，请稍后重试。' : code || '请求失败'));
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function isSessionExpired(error) {
+  return error.status === 401 && error.code === 'authentication_required';
+}
+
+async function requestJSON(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new APIError(response.status, body?.code);
+  }
+  const data = response.status === 204 ? null : await response.json();
+  return {data, headers: response.headers};
+}
+
 async function api(url, body, headers) {
-  const response = await fetch(url, body === undefined ? undefined : {
+  const {data} = await requestJSON(url, body === undefined ? undefined : {
     method:'POST', headers:{'Content-Type':'application/json', ...headers}, body:JSON.stringify(body)
   });
-  if (response.status === 204) return null;
-  const data = await response.json();
-  if (!response.ok) throw new Error(errors[data.code] || data.code || '请求失败');
   return data;
+}
+
+async function fetchHistory(before = '') {
+  const {data, headers} = await requestJSON(before ? path + '?before=' + encodeURIComponent(before) : path);
+  return {items:data, next:headers.get('X-Next-Cursor') || ''};
+}
+
+function appendHistory(current, incoming) {
+  const seen = new Set(current.map(item => item.task_id));
+  return [...current, ...incoming.filter(item => !seen.has(item.task_id))];
 }
 
 function App() {
   const [user,setUser] = useState(null);
+  const [sessionCheck,setSessionCheck] = useState(0);
+  const [sessionCheckError,setSessionCheckError] = useState('');
   const [register,setRegister] = useState(false);
   const [history,setHistory] = useState([]);
+  const [historyCursor,setHistoryCursor] = useState('');
+  const [historyBusy,setHistoryBusy] = useState(false);
+  const historyLoading = useRef(false);
+  const sessionScope = useRef({});
+  const selection = useRef({id:''});
   const [selected,setSelected] = useState('');
   const [task,setTask] = useState(null);
   const [events,setEvents] = useState([]);
@@ -61,107 +99,200 @@ function App() {
 
   useEffect(() => {
     let active = true;
-    api('/api/v1/auth/session').then(() => { if(active) setUser(true); },
-      () => { if(active) setUser(false); });
+    api('/api/v1/auth/session').then(() => {
+      if (active) setUser(true);
+    }, error => {
+      if (!active) return;
+      if (isSessionExpired(error)) {
+        setUser(false);
+      } else {
+        setSessionCheckError('暂时无法检查登录状态，请稍后重试。');
+      }
+    });
     return () => { active = false; };
-  }, []);
+  }, [sessionCheck]);
+
+  function endSession(message = '') {
+    sessionScope.current = {};
+    historyLoading.current = false;
+    requestKey.current = null;
+    select('');
+    setHistory([]);
+    setHistoryCursor('');
+    setHistoryBusy(false);
+    setGoal('');
+    setSettings(false);
+    setModelInfo(null);
+    setBusy(false);
+    setError(message);
+    setUser(false);
+  }
+
+  function handleSessionError(scope, error) {
+    if (sessionScope.current !== scope) return;
+    if (isSessionExpired(error)) {
+      endSession(error.message);
+    } else {
+      setError(error.message);
+    }
+  }
 
   useEffect(() => {
     if (!user) return;
     let active = true;
-    api(path).then(items => { if(active) setHistory(items); },
-      e => { if(active) setError(e.message); });
+    const scope = sessionScope.current;
+    fetchHistory().then(({items,next}) => {
+      if (!active || sessionScope.current !== scope) return;
+      setHistory(old => appendHistory(old, items));
+      setHistoryCursor(next);
+    }, e => { if (active) handleSessionError(scope, e); });
     return () => { active = false; };
   }, [user]);
 
   useEffect(() => {
     if (!user) return;
-    let active=true;
-    api('/api/v1/model-config').then(value=>{if(active)setModelInfo(value);},e=>{if(active)setError(e.message);});
+    let active = true;
+    const scope = sessionScope.current;
+    api('/api/v1/model-config').then(value => {
+      if (active && sessionScope.current === scope) setModelInfo(value);
+    }, e => { if (active) handleSessionError(scope, e); });
     return ()=>{active=false;};
   },[user,settings,selected]);
 
+  async function loadMoreHistory() {
+    if (!historyCursor || historyLoading.current) return;
+    const scope = sessionScope.current;
+    historyLoading.current = true;
+    setHistoryBusy(true);
+    try {
+      const {items,next} = await fetchHistory(historyCursor);
+      if (sessionScope.current !== scope) return;
+      setHistory(old => appendHistory(old, items));
+      setHistoryCursor(next);
+    } catch (e) {
+      handleSessionError(scope, e);
+    } finally {
+      if (sessionScope.current === scope) {
+        historyLoading.current = false;
+        setHistoryBusy(false);
+      }
+    }
+  }
+
+  async function runModelOperation(request, apply) {
+    const scope = sessionScope.current;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await request();
+      if (sessionScope.current === scope) apply(result);
+    } catch (e) {
+      handleSessionError(scope, e);
+    } finally {
+      if (sessionScope.current === scope) setBusy(false);
+    }
+  }
+
   async function saveModel(event) {
     event.preventDefault();
-    setBusy(true);setError('');
-    const form=new FormData(event.currentTarget);
-    try {
-      const response=await fetch('/api/v1/model-config',{
-        method:'PUT',headers:{'Content-Type':'application/json'},
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    await runModelOperation(
+      () => requestJSON('/api/v1/model-config', {
+        method:'PUT', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({base_url:form.get('base_url'),model:form.get('model'),api_key:form.get('api_key')})
-      });
-      const result=await response.json();
-      if(!response.ok)throw new Error(result.code);
-      event.target.reset();
-      setSettings(false);
-      setModelInfo(null);
-    } catch(e){setError(e.message);}
-    finally{setBusy(false);}
+      }),
+      () => {
+        formElement.reset();
+        setSettings(false);
+        setModelInfo(null);
+      },
+    );
   }
 
   useEffect(() => {
-    if (!selected || !user) return;
-    let live = true;
+    if (!selected || !user || selection.current.id !== selected) return;
+    const scope = selection.current;
+    const session = sessionScope.current;
     const endpoint = path + '/' + selected;
     let stream;
-    let generation=0;
-    async function refresh() {
+    let generation = 0;
+    const isCurrent = ticket => selection.current === scope && ticket === generation;
+
+    async function refresh(ticket) {
       try {
-        const current=await api(endpoint);
-        if(!live)return null;
-        setTask(old=>old&&BigInt(old.event_seq)>BigInt(current.event_seq)?old:current);
-        setHistory(old=>[current,...old.filter(item=>item.task_id!==current.task_id)]);
-        if(current.status==='SUCCEEDED'||current.status==='PARTIAL'){
-          const result=await api(endpoint+'/report');
-          if(live)setReport(result.markdown);
+        const current = await api(endpoint);
+        if (!isCurrent(ticket) || current.task_id !== selected) return null;
+        setTask(old => isCurrent(ticket) ? mergeTaskSnapshot(old, current, selected) : old);
+        setHistory(old => isCurrent(ticket) ? old.map(item => mergeTaskSnapshot(item, current, item.task_id)) : old);
+        if (current.status === 'SUCCEEDED' || current.status === 'PARTIAL') {
+          const result = await api(endpoint + '/report');
+          if (isCurrent(ticket) && result.task_id === selected) setReport(result.markdown);
         }
         return current;
-      }catch(e){if(live)setError(e.message);return null;}
+      } catch (e) {
+        if (isCurrent(ticket)) handleSessionError(session, e);
+        return null;
+      }
     }
-    async function connect(){
-      const ticket=++generation;
+
+    async function connect() {
+      const ticket = ++generation;
       stream?.close();
-      const current=await refresh();
-      if(!live||ticket!==generation||!current)return;
-      if(terminal(current.status)){setConnection('');return;}
-      stream=new EventSource(endpoint+'/events?after='+encodeURIComponent(current.event_seq));
-      stream.onopen=()=>{if(live)setConnection('实时连接已建立');};
-      stream.onerror=()=>{
-        if(!live)return;
+      stream = null;
+      const current = await refresh(ticket);
+      if (!isCurrent(ticket) || !current) return;
+      if (terminal(current.status)) {
+        setConnection('');
+        return;
+      }
+      const source = new EventSource(endpoint + '/events?after=' + encodeURIComponent(current.event_seq));
+      stream = source;
+      const ownsStream = () => isCurrent(ticket) && stream === source;
+      source.onopen = () => { if (ownsStream()) setConnection('实时连接已建立'); };
+      source.onerror = () => {
+        if (!ownsStream()) return;
         setConnection('连接中断，正在重连');
-        void refresh().then(current=>{
-          if(live&&current&&terminal(current.status)){stream?.close();setConnection('');}
+        void refresh(ticket).then(snapshot => {
+          if (ownsStream() && snapshot && terminal(snapshot.status)) {
+            source.close();
+            stream = null;
+            setConnection('');
+          }
         });
       };
-      stream.addEventListener('reset',()=>{
-        if(!live)return;
-        stream.close();
+      source.addEventListener('reset', () => {
+        if (!ownsStream()) return;
         setEvents([]);
         setTask(null);
         setConnection('正在恢复任务快照');
         void connect();
       });
-      for(const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','plan_updated','replan_started','report_ready']){
-        stream.addEventListener(type,event=>{
-          if(!live)return;
-          const value=JSON.parse(event.data);
-          const item={...value,type};
-          setEvents(old=>mergeEvent(old,item));
-          setTask(old=>applyTaskEvent(old,item));
-          if((type==='task_status'||type==='report_ready')&&terminal(value.payload.status)){
-            stream.close();setConnection('');
-            void refresh();
+      for (const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','plan_updated','replan_started','report_ready']) {
+        source.addEventListener(type, event => {
+          if (!ownsStream()) return;
+          const value = JSON.parse(event.data);
+          if (value.task_id !== selected) return;
+          const item = {...value,type};
+          setEvents(old => isCurrent(ticket) ? mergeEvent(old,item) : old);
+          setTask(old => isCurrent(ticket) && old?.task_id === selected ? applyTaskEvent(old,item) : old);
+          if ((type === 'task_status' || type === 'report_ready') && terminal(value.payload.status)) {
+            source.close();
+            stream = null;
+            setConnection('');
+            void refresh(ticket);
           }
         });
       }
     }
-    void connect();
-    return ()=>{live=false;generation++;stream?.close();};
 
+    void connect();
+    return () => { generation++; stream?.close(); };
   }, [selected,user]);
 
   function select(id) {
-    if (id === selected) return;
+    if (id === selection.current.id) return;
+    selection.current = {id};
     setReport(''); setTask(null); setEvents([]); setError(''); setConnection('');
     setSelected(id);
   }
@@ -174,6 +305,7 @@ function App() {
     try {
       if (register) await api('/api/v1/auth/register',credentials);
       await api('/api/v1/auth/login',credentials);
+      sessionScope.current = {};
       setUser(true);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
@@ -184,115 +316,83 @@ function App() {
     setBusy(true); setError('');
     const value = goal.trim();
     if (requestKey.current?.goal !== value) requestKey.current = {goal:value,id:newRequestID()};
+    const scope = sessionScope.current;
     try {
       const created = await api(path,{goal:value},{'Idempotency-Key':requestKey.current.id});
+      if (sessionScope.current !== scope) return;
       select(created.task_id);
       setTask(created);
       setHistory(old => [created,...old.filter(item => item.task_id !== created.task_id)]);
       setGoal('');
       requestKey.current = null;
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+    } catch (e) {
+      handleSessionError(scope, e);
+    } finally {
+      if (sessionScope.current === scope) setBusy(false);
+    }
+  }
+
+  function downloadReport() {
+    if (!report || !selected) return;
+    const blob = new Blob([report], {type:'text/markdown;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `researchpilot-${selected}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function cancelTask() {
+    const scope = selection.current;
+    const session = sessionScope.current;
+    if (!scope.id) return;
     try {
-      const current = await api(path+'/'+selected+'/cancel',{});
-      setTask(old => old && BigInt(old.event_seq)>BigInt(current.event_seq)?old:current);
-    } catch(e) { setError(e.message); }
+      const current = await api(path + '/' + scope.id + '/cancel', {});
+      if (selection.current !== scope || current.task_id !== scope.id) return;
+      setTask(old => selection.current === scope ? mergeTaskSnapshot(old, current, scope.id) : old);
+      setHistory(old => selection.current === scope ? old.map(item => mergeTaskSnapshot(item, current, item.task_id)) : old);
+    } catch (e) {
+      if (selection.current === scope) handleSessionError(session, e);
+    }
   }
 
-  async function probeModel(){
-    setBusy(true);setError('');
-    try{const result=await api('/api/v1/model-config/probe',{});setModelInfo(old=>({...old,...result}));}
-    catch(e){setError(e.message);}finally{setBusy(false);}
+  function probeModel() {
+    return runModelOperation(
+      () => api('/api/v1/model-config/probe', {}),
+      result => setModelInfo(old => ({...old,...result})),
+    );
   }
-  async function revokeModel(){
-    setBusy(true);setError('');
-    try{
-      const response=await fetch('/api/v1/model-config',{method:'DELETE',headers:{'Content-Type':'application/json'},body:'{}'});
-      const result=await response.json();if(!response.ok)throw new Error(result.code);
-      setModelInfo(old=>({...old,...result}));
-    }catch(e){setError(e.message);}finally{setBusy(false);}
+
+  function revokeModel() {
+    return runModelOperation(
+      () => requestJSON('/api/v1/model-config', {
+        method:'DELETE', headers:{'Content-Type':'application/json'}, body:'{}',
+      }),
+      ({data}) => setModelInfo(old => ({...old,...data,capabilities:undefined,errors:undefined})),
+    );
   }
+
   async function logout() {
+    const scope = sessionScope.current;
     try {
-      await api('/api/v1/auth/logout',{});
-      select('');
-      setHistory([]);
-      setUser(false);
-    } catch (e) { setError(e.message); }
+      await api('/api/v1/auth/logout', {});
+      if (sessionScope.current === scope) endSession();
+    } catch (e) {
+      handleSessionError(scope, e);
+    }
   }
 
-  if (user === null) return <main className="login"><p role="status">正在检查登录状态</p></main>;
-  if (!user) return <main className="login">
-    <form onSubmit={authenticate}>
-      <p className="brand">ResearchPilot</p>
-      <h1>{register ? '创建账户' : '登录研究工作台'}</h1>
-      <label>邮箱<input type="email" name="email" required autoComplete="email"/></label>
-      <label>密码<input type="password" name="password" required minLength={register?10:undefined}
-        autoComplete={register?'new-password':'current-password'}/></label>
-      {error && <p className="error" role="alert">{error}</p>}
-      <button disabled={busy}>{register?'注册并登录':'登录'}</button>
-      <button type="button" className="plain" onClick={() => {setRegister(!register);setError('');}}>
-        {register?'返回登录':'创建账户'}
-      </button>
-    </form>
+  if (user === null) return <main className="auth-page">
+    {sessionCheckError ? <div><p role="alert">{sessionCheckError}</p><button onClick={() => {
+      setSessionCheckError('');
+      setSessionCheck(attempt => attempt + 1);
+    }}>重试</button></div> : <p role="status">正在检查登录状态</p>}
   </main>;
-
-  return <div className="layout">
-    <aside>
-      <p className="brand">ResearchPilot</p>
-      <button className="plain" onClick={() => select('')}>＋ 新建研究</button>
-      <button className="plain" onClick={()=>{setModelInfo(null);setSettings(value=>!value);}}>模型设置</button>
-      <h2>研究历史</h2>
-      {!history.length && <p className="muted">暂无任务</p>}
-      {history.map(item => <button key={item.task_id} className="history"
-        aria-current={selected===item.task_id?'page':undefined} onClick={() => select(item.task_id)}>
-        <span>{item.goal}</span><small>{labels[item.status]}</small>
-      </button>)}
-      <button className="plain logout" onClick={logout}>退出登录</button>
-    </aside>
-    <main>
-      {error && <p className="error" role="alert">{error}</p>}
-      {settings ? (!modelInfo ? <p role="status">正在加载模型设置</p> : <form onSubmit={saveModel}>
-        <h1>模型设置</h1>
-        {modelInfo?.trial_enabled && <p>免费试用剩余 {modelInfo.trial_remaining} / {modelInfo.trial_limit} 次。使用自己的 API Key 不消耗试用次数。</p>}
-        {modelInfo?.configured && <p>已配置 {modelInfo.model}，密钥尾号 {modelInfo.key_tail}</p>}
-        <label>Base URL<input name="base_url" type="url" defaultValue={modelInfo?.base_url || 'https://api.deepseek.com'} required/></label>
-        <label>模型名称<input name="model" defaultValue={modelInfo?.model || 'deepseek-flash'} required/></label>
-        <label>API Key<input name="api_key" type="password" autoComplete="off" required={!modelInfo?.configured} placeholder={modelInfo?.configured?'留空保留现有密钥，填写新值则替换':''}/></label>
-        <p className="muted">保存后，新任务使用该配置版本。</p>
-        <button disabled={busy}>加密保存</button>
-        {modelInfo?.configured && <>
-          <button type="button" disabled={busy} onClick={probeModel}>检查连接与能力</button>
-          <button type="button" disabled={busy} onClick={revokeModel}>撤销全部已保存密钥版本</button>
-        </>}
-        {modelInfo?.capabilities && <pre>{JSON.stringify(modelInfo.capabilities,null,2)}</pre>}
-      </form>) : !selected ? <form onSubmit={submit}>
-        <h1>新建研究</h1>
-        <label>研究目标<textarea value={goal} onChange={event=>setGoal(event.target.value)}
-          maxLength={2000} rows={5} placeholder="例如：比较 Gin 和 Hertz 的 SSE 集成方式" required/></label>
-        <p className="muted">{modelInfo?.configured ? "当前使用自己的模型配置。" : modelInfo?.trial_enabled ? `免费试用剩余 ${modelInfo.trial_remaining} / ${modelInfo.trial_limit} 次；用完后请配置自己的 API Key。` : "配置模型后可研究公开网页和 GitHub 仓库；尚未配置时运行演示任务。"}</p>
-        <button disabled={busy || !goal.trim()}>开始研究</button>
-      </form> : <>
-        <header><h1>{task?.goal || '研究任务'}</h1><span className="status" role="status">{labels[task?.status] || '正在加载'}</span></header>
-        {task && !terminal(task.status) && <button disabled={task.status==='CANCELLING'} onClick={cancelTask}>取消研究</button>}
-        {connection && <p className="muted" aria-live="polite">{connection}</p>}
-        <div className="result">
-          <section><h2>研究报告</h2>{report ? <pre>{report}</pre> : <p className="muted">{task?.status==='FAILED' ? '研究未完成：'+(errors[task.error_code] || task.error_code || '请查看运行记录') : '报告生成后会显示在这里。'}</p>}</section>
-          <section><h2>运行记录</h2>
-            <ul>{task?.calls?.map(call=><li key={call.tool_call_id}>
-              {call.tool_call_id} · 第 {call.attempt_no} 次 · {call.status}
-            </li>)}</ul>
-            <ol>{events.map(item=><li key={item.seq}>
-              {item.type==='tool_finished'?item.payload.summary : labels[item.payload.status] || item.type}
-            </li>)}</ol>
-          </section>
-        </div>
-      </>}
-    </main>
-  </div>;
+  if (!user) return <AuthView {...{register,setRegister,authenticate,error,setError,busy}}/>;
+  return <Workspace {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,busy,saveModel,probeModel,revokeModel,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
 }
 
 createRoot(document.getElementById('root')).render(<App/>);

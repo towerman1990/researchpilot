@@ -73,11 +73,11 @@ try{
   await until("[...document.querySelectorAll('button')].some(b=>b.textContent==='开始研究'&&!b.disabled)","enabled submit");
   await clickText('开始研究');
   await until("document.querySelector('.status')?.textContent==='已完成'","task completes",45000);
-  await until("document.querySelector('pre')?.textContent.includes('M1 演示报告')","report rendered");
+  await until("document.querySelector('.report-content')?.textContent.includes('M1 演示报告')","report rendered");
   await command('Page.reload');
   await until("!!document.querySelector('button.history')","history after reload");
   await evaluate("document.querySelector('button.history').click()");
-  await until("document.querySelector('pre')?.textContent.includes('M1 演示报告')","report restored from snapshot");
+  await until("document.querySelector('.report-content')?.textContent.includes('M1 演示报告')","report restored from snapshot");
   await clickText('模型设置');
   await until("!!document.querySelector('input[name=api_key]')","model form");
   await setInput('input[name=base_url]','https://api.deepseek.com');

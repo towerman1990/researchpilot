@@ -1,5 +1,11 @@
 export const terminal = status => ['SUCCEEDED','FAILED','PARTIAL','CANCELLED'].includes(status);
 
+export function mergeTaskSnapshot(current, incoming, selected) {
+  if (incoming.task_id !== selected) return current;
+  if (current?.task_id === selected && BigInt(current.event_seq) > BigInt(incoming.event_seq)) return current;
+  return incoming;
+}
+
 export function applyTaskEvent(current, event) {
   if (!current || BigInt(event.seq) <= BigInt(current.event_seq || '0')) return current;
   const payload = event.payload || {};

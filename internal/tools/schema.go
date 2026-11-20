@@ -1,10 +1,7 @@
 package tools
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/url"
 	"regexp"
 	"strings"
@@ -46,22 +43,6 @@ func (i Input) Validate() error {
 		return &Error{Code: "unknown_tool", Correctable: true}
 	}
 	return nil
-}
-func ParsePlan(raw string) ([]Input, error) {
-	var p struct {
-		Steps []Input `json:"steps"`
-	}
-	d := json.NewDecoder(bytes.NewBufferString(raw))
-	d.DisallowUnknownFields()
-	if d.Decode(&p) != nil || d.Decode(new(any)) != io.EOF || len(p.Steps) < 1 || len(p.Steps) > 4 {
-		return nil, errors.New("invalid_plan_schema")
-	}
-	for _, step := range p.Steps {
-		if err := step.Validate(); err != nil {
-			return nil, err
-		}
-	}
-	return p.Steps, nil
 }
 
 // The same published input schemas are available to provider capability clients.

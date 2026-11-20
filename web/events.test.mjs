@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applyTaskEvent,mergeEvent,terminal} from './events.js';
+import {applyTaskEvent,mergeEvent,mergeTaskSnapshot,terminal} from './events.js';
 
 test('a successful tool attempt cannot complete the research task',()=>{
   const state={status:'RUNNING',event_seq:'9007199254740993'};
@@ -29,4 +29,13 @@ test('partial report is terminal and clears active phase', () => {
   const next=applyTaskEvent({status:'RUNNING',phase:'synthesizing',event_seq:'1'},{seq:'2',type:'report_ready',payload:{status:'PARTIAL'}});
   assert.equal(next.status,'PARTIAL');
   assert.equal(next.phase,null);
+});
+test('a delayed snapshot can only update its selected task', () => {
+  const current = {task_id:'B', event_seq:'3'};
+  const delayed = {task_id:'A', event_seq:'13'};
+  assert.equal(mergeTaskSnapshot(current, delayed, 'B'), current);
+  assert.equal(mergeTaskSnapshot(null, delayed, 'B'), null);
+  assert.equal(mergeTaskSnapshot(current, {...current,event_seq:'2'}, 'B'), current);
+  const next = {...current,event_seq:'4'};
+  assert.equal(mergeTaskSnapshot(current, next, 'B'), next);
 });
