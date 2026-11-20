@@ -83,17 +83,15 @@ try{
   await setInput('input[name=base_url]','https://api.deepseek.com');
   await setInput('input[name=model]','browser-fixture');
   await setInput('input[name=api_key]','browser-fixture-key');
-  await clickText('加密保存');
-  await until("!document.querySelector('input[name=api_key]')","config saved");
-  await clickText('模型设置');
+  await clickText('保存并使用');
   await until("document.body.textContent.includes('密钥尾号 -key')","redacted config loaded");
   await until("document.querySelector('input[name=model]')?.value==='browser-fixture'","saved model name");
-  // Submit without a replacement key and verify that the retained key remains configured.
-  await clickText('加密保存');
-  await until("!document.querySelector('input[name=api_key]')","config retained");
-  await clickText('模型设置');
-  await until("document.body.textContent.includes('密钥尾号 -key')","retained key tail");
-  await until("document.querySelector('input[name=model]')?.value==='browser-fixture'","retained model name");
+  // Editing the active profile with an empty key should create a new version using the existing key.
+  const readSettings = "fetch('/api/v1/model-config').then(r=>r.json())";
+  const before = await evaluate(readSettings);
+  await until("document.querySelector('input[name=api_key]')?.value===''","cleared key field");
+  await clickText('保存并使用');
+  await until(`${readSettings}.then(config=>config.version>${Number(before.version)} && config.key_tail==='-key')`,"new version retained the key");
   await clickText('撤销全部已保存密钥版本');
   await until("![...document.querySelectorAll('button')].some(b=>b.textContent.includes('撤销全部'))","config revoked");
   const shot=await command('Page.captureScreenshot',{format:'png'});
