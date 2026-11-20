@@ -92,6 +92,7 @@ try{
   await until("document.querySelector('input[name=api_key]')?.value===''","cleared key field");
   await clickText('保存并使用');
   await until(`${readSettings}.then(config=>config.version>${Number(before.version)} && config.key_tail==='-key')`,"new version retained the key");
+  await until("[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='撤销全部已保存密钥版本'&&!b.disabled)","settings update finished");
   await clickText('撤销全部已保存密钥版本');
   await until("![...document.querySelectorAll('button')].some(b=>b.textContent.includes('撤销全部'))","config revoked");
   const shot=await command('Page.captureScreenshot',{format:'png'});
