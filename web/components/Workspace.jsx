@@ -3,6 +3,7 @@ const ReactMarkdown = React.lazy(() => import('react-markdown'));
 import {Alert, Button, Card, ConfigProvider, Empty, Input, Progress, Space, Tag, Typography} from 'antd';
 import {ArrowRightOutlined, BookOutlined, CheckCircleOutlined, CompassOutlined, DownloadOutlined, ExperimentOutlined, FileTextOutlined, HistoryOutlined, LockOutlined, LogoutOutlined, PlusOutlined, SearchOutlined, SettingOutlined, ThunderboltOutlined} from '@ant-design/icons';
 import {terminal} from '../events.js';
+import brandIcon from '../researchpilot-icon.png';
 
 const {Text} = Typography;
 const {TextArea} = Input;
@@ -13,7 +14,7 @@ const eventLabels = {task_status:'任务状态更新',step_started:'开始执行
 export function Theme({children}) {
   return <ConfigProvider button={{autoInsertSpace:false}} theme={{token:{colorPrimary:'#2354d8',borderRadius:12,fontFamily:'Inter, "Microsoft YaHei", sans-serif',colorText:'#182540',colorBgLayout:'#f5f7fc'}}}>{children}</ConfigProvider>;
 }
-function Brand() { return <div className="brand"><span className="brand-mark"><CompassOutlined /></span><span><strong>ResearchPilot</strong><small>你的技术研究助手</small></span></div>; }
+function Brand() { return <div className="brand"><img className="brand-mark" src={brandIcon} width={38} height={38} alt="" /><span><strong>ResearchPilot</strong><small>你的技术研究助手</small></span></div>; }
 function ErrorNotice({error}) {return error ? <Alert className="error-notice" type="error" showIcon message={error} role="alert"/> : null;}
 
 export function AuthView({register, setRegister, authenticate, error, setError, busy}) {
