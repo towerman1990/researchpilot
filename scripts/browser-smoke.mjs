@@ -34,7 +34,7 @@ async function evaluate(expression){
 async function until(expression,label,timeout=20000){
   const end=Date.now()+timeout;
   while(Date.now()<end){
-    if(await evaluate("Boolean("+expression+")"))return;
+    if(await evaluate("Promise.resolve("+expression+").then(Boolean)"))return;
     await wait(150);
   }
   throw new Error('Browser assertion timed out: '+label);
