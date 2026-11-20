@@ -264,7 +264,7 @@ func (a *apiServer) createTask(w http.ResponseWriter, r *http.Request, tenant st
 	if err != nil {
 		panic(err)
 	}
-	task, err := (taskservice.TaskActions{Store: store}).Submit(r.Context(), tenant, r.Header.Get("Idempotency-Key"), input.Goal)
+	task, err := (taskservice.TaskActions{Store: store}).Submit(r.Context(), tenant, r.Header.Get("Idempotency-Key"), input.Goal, "", false)
 	if err == nil {
 		w.Header().Set("Location", "/api/v1/research/tasks/"+task.ID)
 	}

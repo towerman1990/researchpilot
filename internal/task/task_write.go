@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 	"unicode/utf8"
 
+	"researchpilot/internal/agent"
 	"researchpilot/internal/common/identity"
 	"researchpilot/internal/repository"
 	"researchpilot/internal/repository/model"
@@ -23,10 +25,13 @@ var (
 	ErrModelRevoked        = errors.New("model_configuration_revoked")
 	ErrTaskNotFound        = errors.New("task_not_found")
 	ErrTaskFinished        = errors.New("task_already_finished")
+	ErrPlanNotAwaiting     = errors.New("plan_not_awaiting_approval")
+	ErrInvalidPlan         = errors.New("invalid_plan")
 	errDuplicateRequest    = errors.New("duplicate request key")
 )
 
 type TaskWriter interface {
+	ReadResearchPreferences(context.Context, string) (model.ResearchPreferences, error)
 	Write(context.Context, string, bool, func(repository.WriteTx) error) error
 	RequestKey(context.Context, string, [32]byte) (model.RequestKey, error)
 	ReadTask(context.Context, string, string) (model.TaskSnapshot, error)
@@ -34,14 +39,33 @@ type TaskWriter interface {
 
 type TaskActions struct{ Store TaskWriter }
 
-func (s TaskActions) Submit(ctx context.Context, tenant, key, goal string) (model.TaskSnapshot, error) {
+func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID string, review bool, attachments ...Material) (model.TaskSnapshot, error) {
 	goal = strings.TrimSpace(goal)
-	if len(key) < 8 || len(key) > 128 || goal == "" || utf8.RuneCountInString(goal) > 2000 {
+	if len(key) < 8 || len(key) > 128 || goal == "" || !utf8.ValidString(goal) || utf8.RuneCountInString(goal) > 2000 {
 		return model.TaskSnapshot{}, ErrInvalidTask
 	}
 	kd, rd := sha256.Sum256([]byte(key)), sha256.Sum256([]byte(goal))
+	if parentID != "" {
+		if _, err := hex.DecodeString(parentID); len(parentID) != 32 || err != nil {
+			return model.TaskSnapshot{}, ErrInvalidTask
+		}
+		parentID = strings.ToLower(parentID)
+		// A leading invalid UTF-8 byte separates follow-up digests from existing goal-only digests.
+		rd = sha256.Sum256([]byte("\xff" + parentID + goal))
+	}
+	if review {
+		rd = sha256.Sum256(append([]byte{0xfe}, rd[:]...))
+	}
+	files, err := normalizeMaterials(attachments)
+	if err != nil {
+		return model.TaskSnapshot{}, err
+	}
+	for _, file := range files {
+		fingerprint := materialFingerprint(file)
+		rd = sha256.Sum256(append(append([]byte{0xfd}, rd[:]...), fingerprint[:]...))
+	}
 	var id string
-	err := s.Store.Write(ctx, tenant, true, func(tx repository.WriteTx) error {
+	err = s.Store.Write(ctx, tenant, true, func(tx repository.WriteTx) error {
 		previous, err := tx.RequestKey(tenant, kd)
 		if err == nil {
 			if !bytes.Equal(previous.Digest, rd[:]) {
@@ -53,8 +77,20 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal string) (mode
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		if parentID != "" {
+			allowed, err := tx.CanFollowUp(tenant, parentID)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrTaskNotFound
+			}
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return ErrReportNotReady
+			}
+		}
 		id = identity.New(16)
-		if err := tx.AddTask(tenant, id, goal); err != nil {
+		if err := tx.AddTask(tenant, id, goal, parentID, review, true); err != nil {
 			return err
 		}
 		version, err := tx.ActiveModelVersion(tenant)
@@ -67,6 +103,9 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal string) (mode
 				return err
 			}
 		}
+		if review && version == 0 {
+			return service.ErrModelNotConfigured
+		}
 		if version > 0 {
 			revoked, err := tx.ModelRevoked(tenant, version)
 			if err != nil {
@@ -76,6 +115,16 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal string) (mode
 				return ErrModelRevoked
 			}
 			if err := tx.SetTaskModel(tenant, id, version); err != nil {
+				return err
+			}
+		}
+		for _, file := range files {
+			sourceID := identity.New(16)
+			source := model.Source{
+				ID: sourceID, Title: file.Name, Excerpt: file.Content,
+				URL: "/api/v1/research/tasks/" + id + "/sources/" + sourceID,
+			}
+			if err := tx.AddUploadedSource(tenant, id, source, materialFingerprint(file)); err != nil {
 				return err
 			}
 		}
@@ -99,6 +148,40 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal string) (mode
 		}
 		id, err = previous.TaskID, nil
 	}
+	if err != nil {
+		return model.TaskSnapshot{}, err
+	}
+	return s.Store.ReadTask(ctx, tenant, id)
+}
+
+func (s TaskActions) ApprovePlan(ctx context.Context, tenant, id string, seq uint64, rawPlan json.RawMessage) (model.TaskSnapshot, error) {
+	plan, err := agent.ParsePlan(string(rawPlan), 1)
+	if err != nil {
+		return model.TaskSnapshot{}, ErrInvalidPlan
+	}
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		return model.TaskSnapshot{}, err
+	}
+	err = s.Store.Write(ctx, tenant, false, func(tx repository.WriteTx) error {
+		task, err := tx.LockTask(tenant, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrTaskNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if task.Status != "AWAITING_APPROVAL" || task.Seq != seq {
+			return ErrPlanNotAwaiting
+		}
+		if err := tx.ApprovePlan(tenant, id, string(encoded), seq+1); err != nil {
+			return err
+		}
+		if err := tx.AppendEvent(tenant, id, seq+1, `{"status":"QUEUED","reason":"plan_approved"}`); err != nil {
+			return err
+		}
+		return tx.AddOutbox(tenant, id)
+	})
 	if err != nil {
 		return model.TaskSnapshot{}, err
 	}

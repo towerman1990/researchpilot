@@ -5,6 +5,8 @@ import "encoding/json"
 type TaskSnapshot struct {
 	ID             string         `json:"task_id"`
 	Goal           string         `json:"goal"`
+	ParentTaskID   *string        `json:"parent_task_id,omitempty"`
+	ReviewPlan     *string        `json:"review_plan,omitempty"`
 	Status         string         `json:"status"`
 	Phase          *string        `json:"phase"`
 	Seq            uint64         `json:"event_seq,string" gorm:"column:event_seq"`
@@ -50,6 +52,7 @@ type Source struct {
 	Title   string `json:"title"`
 	URL     string `json:"url" gorm:"column:canonical_url"`
 	Excerpt string `json:"excerpt"`
+	Type    string `json:"source_type,omitempty" gorm:"column:source_type"`
 }
 
 type RequestKey struct {
@@ -63,14 +66,18 @@ type BudgetAttempt struct {
 }
 
 type ExecutionTask struct {
-	Status           string
-	Goal             string
-	Generation       uint32
-	LeaseEpoch       uint32
-	EventSeq         uint64
-	PastDeadline     bool
-	ValidLease       bool
-	RetryCount       uint16
-	RemainingSeconds float64
-	ModelVersion     uint32
+	Status              string
+	Goal                string
+	ParentTaskID        *string
+	PreferencesSnapshot *string
+	RequiresPlanReview  bool
+	ApprovedPlan        *string
+	Generation          uint32
+	LeaseEpoch          uint32
+	EventSeq            uint64
+	PastDeadline        bool
+	ValidLease          bool
+	RetryCount          uint16
+	RemainingSeconds    float64
+	ModelVersion        uint32
 }

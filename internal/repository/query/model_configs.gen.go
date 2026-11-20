@@ -192,12 +192,17 @@ type IModelSummaryDo interface {
 	TrialCount(tenant string) (result []int, err error)
 	LatestPersonalModel(tenant string) (result []model.ModelSummary, err error)
 	RevokePersonalModels(tenant string) (err error)
+	ListModelProfiles(tenant string) (result []model.ModelProfile, err error)
+	FindModelProfile(tenant string, id uint32) (result []model.ModelProfile, err error)
+	FindActiveModelProfile(tenant string) (result []model.ModelProfile, err error)
+	SaveModelProfile(tenant string, id uint32, version uint32, label string) (err error)
+	SetActiveModelProfile(tenant string, id uint32) (err error)
 }
 
-// SELECT DISTINCT tenant_id FROM model_configs m WHERE revoked=false AND is_trial=false AND version=(SELECT MAX(version) FROM model_configs n WHERE n.tenant_id=m.tenant_id AND n.is_trial=false)
+// SELECT p.tenant_id FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.is_active=true AND m.revoked=false AND m.is_trial=false
 func (m modelSummaryDo) EvaluationTenants() (result []string, err error) {
 	var generateSQL strings.Builder
-	generateSQL.WriteString("SELECT DISTINCT tenant_id FROM model_configs m WHERE revoked=false AND is_trial=false AND version=(SELECT MAX(version) FROM model_configs n WHERE n.tenant_id=m.tenant_id AND n.is_trial=false) ")
+	generateSQL.WriteString("SELECT p.tenant_id FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.is_active=true AND m.revoked=false AND m.is_trial=false ")
 
 	var executeSQL *gorm.DB
 	executeSQL = m.UnderlyingDB().Raw(generateSQL.String()).Find(&result) // ignore_security_alert
@@ -222,13 +227,13 @@ func (m modelSummaryDo) ModelRevoked(tenant string, version uint32) (result []bo
 	return
 }
 
-// SELECT COALESCE(MAX(version),0) FROM @@table WHERE tenant_id=@tenant AND is_trial=false AND revoked=false
+// SELECT COALESCE(MAX(m.version),0) FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND p.is_active=true AND m.is_trial=false AND m.revoked=false
 func (m modelSummaryDo) ActiveVersion(tenant string) (result []uint32, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, tenant)
-	generateSQL.WriteString("SELECT COALESCE(MAX(version),0) FROM model_configs WHERE tenant_id=? AND is_trial=false AND revoked=false ")
+	generateSQL.WriteString("SELECT COALESCE(MAX(m.version),0) FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=? AND p.is_active=true AND m.is_trial=false AND m.revoked=false ")
 
 	var executeSQL *gorm.DB
 	executeSQL = m.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
@@ -373,6 +378,86 @@ func (m modelSummaryDo) RevokePersonalModels(tenant string) (err error) {
 	var generateSQL strings.Builder
 	params = append(params, tenant)
 	generateSQL.WriteString("UPDATE model_configs SET revoked=true WHERE tenant_id=? AND is_trial=false ")
+
+	var executeSQL *gorm.DB
+	executeSQL = m.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND m.revoked=false AND m.is_trial=false ORDER BY p.is_active DESC,p.id
+func (m modelSummaryDo) ListModelProfiles(tenant string) (result []model.ModelProfile, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	generateSQL.WriteString("SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=? AND m.revoked=false AND m.is_trial=false ORDER BY p.is_active DESC,p.id ")
+
+	var executeSQL *gorm.DB
+	executeSQL = m.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND p.id=@id AND m.revoked=false AND m.is_trial=false
+func (m modelSummaryDo) FindModelProfile(tenant string, id uint32) (result []model.ModelProfile, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	params = append(params, id)
+	generateSQL.WriteString("SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=? AND p.id=? AND m.revoked=false AND m.is_trial=false ")
+
+	var executeSQL *gorm.DB
+	executeSQL = m.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND p.is_active=true AND m.revoked=false AND m.is_trial=false LIMIT 1
+func (m modelSummaryDo) FindActiveModelProfile(tenant string) (result []model.ModelProfile, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	generateSQL.WriteString("SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=? AND p.is_active=true AND m.revoked=false AND m.is_trial=false LIMIT 1 ")
+
+	var executeSQL *gorm.DB
+	executeSQL = m.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// INSERT INTO model_profiles(tenant_id,id,version,label) VALUES(@tenant,@id,@version,@label) AS incoming ON DUPLICATE KEY UPDATE version=incoming.version,label=incoming.label
+func (m modelSummaryDo) SaveModelProfile(tenant string, id uint32, version uint32, label string) (err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	params = append(params, id)
+	params = append(params, version)
+	params = append(params, label)
+	generateSQL.WriteString("INSERT INTO model_profiles(tenant_id,id,version,label) VALUES(?,?,?,?) AS incoming ON DUPLICATE KEY UPDATE version=incoming.version,label=incoming.label ")
+
+	var executeSQL *gorm.DB
+	executeSQL = m.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// UPDATE model_profiles SET is_active=(id=@id) WHERE tenant_id=@tenant
+func (m modelSummaryDo) SetActiveModelProfile(tenant string, id uint32) (err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, id)
+	params = append(params, tenant)
+	generateSQL.WriteString("UPDATE model_profiles SET is_active=(id=?) WHERE tenant_id=? ")
 
 	var executeSQL *gorm.DB
 	executeSQL = m.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert

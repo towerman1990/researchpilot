@@ -66,8 +66,11 @@ func (h Auth) requireJSON(_ context.Context, c *app.RequestContext) {
 	}
 }
 func parseJSON(c *app.RequestContext, dst any) bool {
+	return parseJSONLimit(c, dst, 8192)
+}
+func parseJSONLimit(c *app.RequestContext, dst any, limit int) bool {
 	body := c.Request.Body()
-	if len(body) <= 8192 {
+	if len(body) <= limit {
 		d := json.NewDecoder(bytes.NewReader(body))
 		d.DisallowUnknownFields()
 		if d.Decode(dst) == nil && d.Decode(new(any)) == io.EOF {

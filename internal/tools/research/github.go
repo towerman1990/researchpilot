@@ -28,16 +28,17 @@ func githubRepository(ctx context.Context, client *http.Client, input toolcontra
 	}
 	raw, err := requestText(ctx, client, base, headers)
 	if err != nil {
-		if err.Error() == "upstream_http_403" || err.Error() == "upstream_http_429" {
+		if input.Path == "" && (err.Error() == "upstream_http_403" || err.Error() == "upstream_http_429") {
 			return githubPublicFallback(ctx, client, input)
 		}
 		return nil, err
 	}
 	var metadata struct {
 		Private       bool
+		Visibility    string
 		DefaultBranch string `json:"default_branch"`
 	}
-	if json.Unmarshal(raw, &metadata) != nil || metadata.Private || metadata.DefaultBranch == "" {
+	if json.Unmarshal(raw, &metadata) != nil || metadata.Private || (metadata.Visibility != "" && metadata.Visibility != "public") || metadata.DefaultBranch == "" {
 		return nil, errors.New("repository_not_public")
 	}
 	commitRaw, err := requestText(ctx, client, base+"/commits/"+url.PathEscape(metadata.DefaultBranch), headers)
@@ -45,21 +46,42 @@ func githubRepository(ctx context.Context, client *http.Client, input toolcontra
 		return nil, err
 	}
 	var commit struct {
-		SHA string `json:"sha"`
+		SHA    string `json:"sha"`
+		Commit struct {
+			Tree struct{ SHA string }
+		}
 	}
 	if json.Unmarshal(commitRaw, &commit) != nil || !commitID.MatchString(commit.SHA) {
 		return nil, errors.New("invalid_commit")
 	}
-	headers["Accept"] = "application/vnd.github.raw+json"
-	readme, err := requestTextLimit(ctx, client, base+"/readme?ref="+commit.SHA, headers, 256<<10)
-	if err != nil {
-		return nil, err
+	repo := "https://github.com/" + input.Owner + "/" + input.Repo
+	canonical := repo + "/tree/" + commit.SHA
+	var sources []model.Source
+	if input.Path == "" {
+		headers["Accept"] = "application/vnd.github.raw+json"
+		readme, readmeErr := requestTextLimit(ctx, client, base+"/readme?ref="+commit.SHA, headers, 256<<10)
+		if readmeErr == nil {
+			sources = append(sources, model.Source{Title: input.Owner + "/" + input.Repo + " README at " + commit.SHA, URL: canonical + "#readme", Excerpt: textutil.Clip(string(readme), 12000)})
+		}
 	}
-	canonical := "https://github.com/" + input.Owner + "/" + input.Repo + "/tree/" + commit.SHA
-	sources := []model.Source{{Title: input.Owner + "/" + input.Repo + " README at " + commit.SHA, URL: canonical, Excerpt: textutil.Clip(string(readme), 12000)}}
 	headers["Accept"] = "application/vnd.github+json"
+	if commitID.MatchString(commit.Commit.Tree.SHA) {
+		deep, treeErr := githubTreeSources(ctx, client, base, repo, commit.SHA, commit.Commit.Tree.SHA, input.Path, headers)
+		if treeErr == nil {
+			return append(sources, deep...), nil
+		}
+		if input.Path != "" {
+			return nil, treeErr
+		}
+	}
+	if input.Path != "" {
+		return nil, errors.New("github_scoped_listing_unavailable")
+	}
 	directory, err := requestText(ctx, client, base+"/contents?ref="+commit.SHA, headers)
 	if err != nil {
+		if len(sources) == 0 {
+			return nil, err
+		}
 		return sources, nil
 	}
 	var entries []struct {
@@ -68,6 +90,9 @@ func githubRepository(ctx context.Context, client *http.Client, input toolcontra
 		Size int
 	}
 	if json.Unmarshal(directory, &entries) != nil {
+		if len(sources) == 0 {
+			return nil, errors.New("invalid_github_directory")
+		}
 		return sources, nil
 	}
 	names := make([]string, 0, len(entries))

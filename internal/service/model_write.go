@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/cipher"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"researchpilot/internal/common/modelkey"
 	"researchpilot/internal/outbound"
@@ -27,9 +29,12 @@ var (
 )
 
 type ModelInput struct {
-	BaseURL string `json:"base_url"`
-	Model   string `json:"model"`
-	APIKey  string `json:"api_key"`
+	BaseURL         string  `json:"base_url"`
+	Model           string  `json:"model"`
+	APIKey          string  `json:"api_key"`
+	Label           *string `json:"label"`
+	NewProfile      bool    `json:"new_profile"`
+	ExpectedVersion uint32  `json:"expected_version"`
 }
 
 func validKey(key string) bool {
@@ -65,6 +70,12 @@ func (s Models) Save(ctx context.Context, tenant string, input ModelInput) (uint
 	if _, err := ProviderFor(nil, ModelConfig{BaseURL: input.BaseURL}); err != nil {
 		return 0, ErrModelHostForbidden
 	}
+	if input.Label != nil && utf8.RuneCountInString(strings.TrimSpace(*input.Label)) > 80 {
+		return 0, ErrInvalidModelConfig
+	}
+	if input.NewProfile && input.APIKey == "" {
+		return 0, ErrAPIKeyRequired
+	}
 	if input.APIKey != "" && !validKey(input.APIKey) {
 		return 0, ErrInvalidAPIKey
 	}
@@ -79,15 +90,26 @@ func (s Models) Save(ctx context.Context, tenant string, input ModelInput) (uint
 		if err != nil {
 			return err
 		}
+		profile := model.ModelProfile{ID: next}
+		if !input.NewProfile {
+			previous, err := tx.ActiveModelProfile(tenant)
+			if err == nil {
+				profile = previous
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if input.ExpectedVersion != 0 && profile.Version != input.ExpectedVersion {
+				return ErrModelProfileChanged
+			}
+		}
+		if input.Label != nil {
+			profile.Label = strings.TrimSpace(*input.Label)
+		}
 		if input.APIKey == "" {
-			if next <= 1 {
+			if profile.Version == 0 || input.BaseURL != profile.BaseURL {
 				return ErrAPIKeyRequired
 			}
-			previous, err := tx.ActiveModelVersion(tenant)
-			if err != nil || previous == 0 {
-				return ErrModelKeyUnavailable
-			}
-			row, err := tx.Credential(tenant, previous)
+			row, err := tx.Credential(tenant, profile.Version)
 			if err != nil {
 				return ErrModelKeyUnavailable
 			}
@@ -97,6 +119,12 @@ func (s Models) Save(ctx context.Context, tenant string, input ModelInput) (uint
 			}
 		}
 		if err := saveCredential(tx, aead, tenant, model.Credential{Version: next, BaseURL: input.BaseURL, Model: input.Model, KeyVersion: keyVersion}, input.APIKey, false); err != nil {
+			return err
+		}
+		if err := tx.SaveModelProfile(tenant, profile.ID, next, profile.Label); err != nil {
+			return err
+		}
+		if err := tx.SetActiveModelProfile(tenant, profile.ID); err != nil {
 			return err
 		}
 		version = next

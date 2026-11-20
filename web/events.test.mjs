@@ -39,3 +39,13 @@ test('a delayed snapshot can only update its selected task', () => {
   const next = {...current,event_seq:'4'};
   assert.equal(mergeTaskSnapshot(current, next, 'B'), next);
 });
+
+test('a task can pause for plan approval and return to the queue', () => {
+  const running = {status:'RUNNING',phase:'planning',event_seq:'8'};
+  const waiting = applyTaskEvent(running,{seq:'9',type:'task_status',payload:{status:'AWAITING_APPROVAL'}});
+  assert.equal(waiting.status,'AWAITING_APPROVAL');
+  assert.equal(waiting.phase,null);
+  assert.equal(terminal(waiting.status),false);
+  const queued = applyTaskEvent(waiting,{seq:'10',type:'task_status',payload:{status:'QUEUED',reason:'plan_approved'}});
+  assert.equal(queued.status,'QUEUED');
+});

@@ -102,7 +102,11 @@ func NewStubProvider() ReportProvider { return stubProvider{} }
 func NewStubTool() ResearchTool       { return stubTool{} }
 
 type taskRow struct {
+	preferencesSnapshot      *string
 	status, goal             string
+	parentTaskID             *string
+	requiresPlanReview       bool
+	approvedPlan             *string
 	generation, epoch        uint32
 	seq                      uint64
 	pastDeadline, validLease bool
@@ -116,7 +120,7 @@ func lockTask(ctx context.Context, tx *repository.ExecutionTx, d delivery) (t ta
 	if err != nil {
 		return t, err
 	}
-	return taskRow{status: row.Status, goal: row.Goal, generation: row.Generation, epoch: row.LeaseEpoch, seq: row.EventSeq, pastDeadline: row.PastDeadline, validLease: row.ValidLease, retries: row.RetryCount, remaining: time.Duration(row.RemainingSeconds * float64(time.Second)), modelVersion: row.ModelVersion}, nil
+	return taskRow{status: row.Status, goal: row.Goal, parentTaskID: row.ParentTaskID, preferencesSnapshot: row.PreferencesSnapshot, requiresPlanReview: row.RequiresPlanReview, approvedPlan: row.ApprovedPlan, generation: row.Generation, epoch: row.LeaseEpoch, seq: row.EventSeq, pastDeadline: row.PastDeadline, validLease: row.ValidLease, retries: row.RetryCount, remaining: time.Duration(row.RemainingSeconds * float64(time.Second)), modelVersion: row.ModelVersion}, nil
 }
 
 func (r Runner) claim(ctx context.Context, d delivery) (t taskRow, claimed bool, err error) {
@@ -167,7 +171,7 @@ func (r Runner) executeDurable(ctx context.Context, d delivery, t taskRow) error
 	defer func() { cancel(); <-done }()
 	if t.modelVersion > 0 {
 		err := e.executeResearch(execCtx, t)
-		if err == nil {
+		if err == nil || errors.Is(err, errPlanReviewPending) {
 			return nil
 		}
 		cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -238,7 +242,7 @@ func safeFailureCode(err error) string {
 func knownFailureCode(err error) string {
 	for ; err != nil; err = errors.Unwrap(err) {
 		switch err.Error() {
-		case "insufficient_evidence", "model_output_truncated", "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_tls_failed", "model_retry_exhausted", "model_configuration_revoked", "invalid_model_config", "invalid_report_json", "invalid_source_id", "no_evidence":
+		case "insufficient_evidence", "model_output_truncated", "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_tls_failed", "model_retry_exhausted", "model_configuration_revoked", "invalid_model_config", "invalid_report_json", "invalid_plan_schema", "invalid_source_id", "no_evidence":
 			return err.Error()
 		}
 	}

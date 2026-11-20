@@ -24,9 +24,9 @@ Plan 输出有版本的结构化步骤，包括目标、工具候选、预期证
 |---|---|---|
 | web_search | query、limit，返回标题、规范 URL、摘要、时间和 provider | 用统一适配器换供应商。摘要用于发现，进入报告前优先读原文。 |
 | fetch_page | 公网 URL，返回标题、干净正文、时间、摘要及哈希 | 默认 HTML/文本，保留原始和最终链接；限制体积与字符，执行出站策略。 |
-| github_repo | owner、repo、可选 ref，返回元信息、README、语言、发布和有限一级目录 | 限公开仓库，ref 解析为 commit SHA，关键引用指向固定提交。不克隆或执行代码。 |
+| github_repo | owner、repo、可选 path，返回 README、目录摘要和依赖清单摘录 | 限公开仓库，默认分支解析为 commit SHA，关键引用指向固定提交。不克隆或执行代码。 |
 
-统一契约 Tool 接受服务端作用域、带时限的 Context 和已校验的 JSON。结果含 evidence、retrieved_at、truncated、error_code。保存最小证据片段，超限、429 与不可用结果转为结构化观察。GitHub API 处理额度和 Retry-After，工具缓存按授权边界与 commit 键控。P1 才做深度依赖分析。[GitHub Contents API](https://docs.github.com/en/rest/repos/contents)
+统一契约 Tool 接受服务端作用域、带时限的 Context 和已校验的 JSON。结果含 evidence、retrieved_at、truncated、error_code。保存最小证据片段，超限、429 与不可用结果转为结构化观察。GitHub API 处理额度和 Retry-After，工具缓存按授权边界与 commit 键控。GitHub 分析按固定提交查看嵌套目录和依赖清单，可指定仓库内目录。每次最多读取六份清单，跨目录概览和清单读取均受大小限制。Git 树超限时仅列出当前目录，并标注覆盖范围。[GitHub Contents API](https://docs.github.com/en/rest/repos/contents)
 
 ## 模型供应商抽象
 

@@ -9,27 +9,42 @@ import (
 	"researchpilot/internal/repository/query"
 )
 
-func (s *Store) ModelStatus(ctx context.Context, tenant string) (*model.ModelSummary, int, error) {
+func (s *Store) ModelStatus(ctx context.Context, tenant string) (*model.ModelSummary, []model.ModelProfile, int, error) {
 	q := s.q.ModelSummary.WithContext(ctx)
 	used, err := q.TrialCount(tenant)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if len(used) != 1 {
-		return nil, 0, fmt.Errorf("expected one trial count, got %d", len(used))
+		return nil, nil, 0, fmt.Errorf("expected one trial count, got %d", len(used))
+	}
+	profiles, err := q.ListModelProfiles(tenant)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if len(profiles) > 0 && profiles[0].IsActive {
+		active := profiles[0]
+		config := &model.ModelSummary{Version: active.Version, BaseURL: active.BaseURL, Model: active.Model, KeyTail: active.KeyTail}
+		return config, profiles, used[0], nil
 	}
 	rows, err := q.LatestPersonalModel(tenant)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if len(rows) == 0 {
-		return nil, used[0], nil
+		return nil, profiles, used[0], nil
 	}
-	return &rows[0], used[0], nil
+	rows[0].Revoked = true
+	return &rows[0], profiles, used[0], nil
 }
 
 func (s *Store) RevokeModels(ctx context.Context, tenant string) error {
-	return s.Write(ctx, tenant, true, func(tx WriteTx) error { return tx.configs.RevokePersonalModels(tenant) })
+	return s.Write(ctx, tenant, true, func(tx WriteTx) error {
+		if err := tx.configs.RevokePersonalModels(tenant); err != nil {
+			return err
+		}
+		return tx.SetActiveModelProfile(tenant, 0)
+	})
 }
 
 // RotateCredentials keeps the locked reads and all ciphertext updates in one transaction.
@@ -64,6 +79,18 @@ func (s *Store) Credential(ctx context.Context, tenant string, version uint32) (
 	return requireOne(s.q.ModelSummary.WithContext(ctx).FindCredential(tenant, version))
 }
 
+func (t WriteTx) ModelProfile(tenant string, id uint32) (model.ModelProfile, error) {
+	return requireOne(t.configs.FindModelProfile(tenant, id))
+}
+func (t WriteTx) ActiveModelProfile(tenant string) (model.ModelProfile, error) {
+	return requireOne(t.configs.FindActiveModelProfile(tenant))
+}
+func (t WriteTx) SaveModelProfile(tenant string, id, version uint32, label string) error {
+	return t.configs.SaveModelProfile(tenant, id, version, label)
+}
+func (t WriteTx) SetActiveModelProfile(tenant string, id uint32) error {
+	return t.configs.SetActiveModelProfile(tenant, id)
+}
 func (t WriteTx) NextModelVersion(tenant string) (uint32, error) {
 	return requireOne(t.configs.NextVersion(tenant))
 }

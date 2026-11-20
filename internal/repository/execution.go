@@ -42,6 +42,9 @@ func (s *ExecutionTx) FinishStep(ctx context.Context, tenant, id, key, status, f
 func (s *ExecutionTx) LockExecutionTask(ctx context.Context, tenant, id string) (model.ExecutionTask, error) {
 	return requireOne(s.q.TaskSnapshot.WithContext(ctx).LockExecutionTask(tenant, id))
 }
+func (s *ExecutionTx) PauseForPlanReview(ctx context.Context, tenant, id, plan string) error {
+	return s.q.TaskSnapshot.WithContext(ctx).PauseForPlanReview(tenant, id, plan)
+}
 func (s *ExecutionTx) ClaimExecutionTask(ctx context.Context, tenant, id string, epoch uint32, seq uint64) error {
 	return s.q.TaskSnapshot.WithContext(ctx).ClaimExecutionTask(tenant, id, epoch, seq)
 }

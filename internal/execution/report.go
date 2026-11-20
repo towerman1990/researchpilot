@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"researchpilot/internal/common/textutil"
@@ -12,6 +13,7 @@ import (
 )
 
 type reportDraft struct {
+	Layout   string `json:"layout,omitempty"`
 	Summary  string `json:"summary"`
 	Findings []struct {
 		Text    string   `json:"text"`
@@ -19,6 +21,8 @@ type reportDraft struct {
 	} `json:"findings"`
 	Limitations []string `json:"limitations"`
 }
+
+var uploadedSourcePath = regexp.MustCompile("^/api/v1/research/tasks/[a-f0-9]{32}/sources/[a-f0-9]{32}$")
 
 func renderReport(draft reportDraft, sources []evidence) (string, []evidence, error) {
 	byID := make(map[string]evidence)
@@ -43,6 +47,9 @@ func renderReport(draft reportDraft, sources []evidence) (string, []evidence, er
 		if len(finding.Sources) == 0 || len(finding.Sources) > 12 || strings.TrimSpace(finding.Text) == "" || len(finding.Text) > 6000 {
 			return "", nil, errors.New("finding_missing_citation")
 		}
+		if draft.Layout == "bullets" {
+			body.WriteString("- ")
+		}
 		body.WriteString(escape(finding.Text))
 		for _, id := range finding.Sources {
 			source, ok := byID[id]
@@ -65,7 +72,11 @@ func renderReport(draft reportDraft, sources []evidence) (string, []evidence, er
 	}
 	body.WriteString("\n## 参考资料\n\n")
 	for i, source := range used {
-		if _, err := outbound.ValidateURL(source.URL); err != nil {
+		if source.Type == "upload" {
+			if !uploadedSourcePath.MatchString(source.URL) || !strings.HasSuffix(source.URL, "/"+source.ID) {
+				return "", nil, errors.New("invalid_source_url")
+			}
+		} else if _, err := outbound.ValidateURL(source.URL); err != nil {
 			return "", nil, errors.New("invalid_source_url")
 		}
 		safeURL := strings.NewReplacer("<", "%3C", ">", "%3E", "\n", "%0A", "\r", "%0D").Replace(source.URL)

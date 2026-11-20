@@ -7,7 +7,18 @@ import (
 	"researchpilot/internal/repository/model"
 )
 
-func (t WriteTx) AddTask(tenant, id, goal string) error { return t.tasks.AddTask(tenant, id, goal) }
+func (t WriteTx) AddTask(tenant, id, goal, parentID string, review, snapshotPreferences bool) error {
+	return t.tasks.AddTask(tenant, id, goal, parentID, review, snapshotPreferences)
+}
+func (t WriteTx) CanFollowUp(tenant, id string) (bool, error) {
+	return requireOne(t.tasks.CanFollowUp(tenant, id))
+}
+func (t WriteTx) ApprovePlan(tenant, id, plan string, seq uint64) error {
+	return t.tasks.ApprovePlan(tenant, id, plan, seq)
+}
+func (t WriteTx) AddUploadedSource(tenant, id string, source model.Source, fingerprint [32]byte) error {
+	return t.tasks.InsertUploadedSource(tenant, id, source.ID, source.Title, source.URL, source.Excerpt, hex.EncodeToString(fingerprint[:]))
+}
 func (t WriteTx) SetTaskModel(tenant, id string, version uint32) error {
 	return t.tasks.SetTaskModel(tenant, id, version)
 }

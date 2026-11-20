@@ -134,8 +134,8 @@ func Checksums(raw []byte) (string, map[string]bool) {
 // CheckReady verifies that the schema required by application commands is ready.
 func CheckReady(ctx context.Context, db *sql.DB) error {
 	var ready bool
-	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='007_trial.sql' AND dirty=false)").Scan(&ready); err != nil || !ready {
-		return errors.New("M2 schema missing; run researchpilot migrate before starting API or worker")
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version='012_uploaded_materials.sql' AND dirty=false)").Scan(&ready); err != nil || !ready {
+		return errors.New("required schema missing; run researchpilot migrate before starting API or worker")
 	}
 	return nil
 }

@@ -31,6 +31,8 @@ func newTaskSnapshot(db *gorm.DB, opts ...gen.DOOption) taskSnapshot {
 	_taskSnapshot.ALL = field.NewAsterisk(tableName)
 	_taskSnapshot.ID = field.NewString(tableName, "id")
 	_taskSnapshot.Goal = field.NewString(tableName, "goal")
+	_taskSnapshot.ParentTaskID = field.NewString(tableName, "parent_task_id")
+	_taskSnapshot.ReviewPlan = field.NewString(tableName, "review_plan")
 	_taskSnapshot.Status = field.NewString(tableName, "status")
 	_taskSnapshot.Phase = field.NewString(tableName, "phase")
 	_taskSnapshot.Seq = field.NewUint64(tableName, "event_seq")
@@ -51,6 +53,8 @@ type taskSnapshot struct {
 	ALL            field.Asterisk
 	ID             field.String
 	Goal           field.String
+	ParentTaskID   field.String
+	ReviewPlan     field.String
 	Status         field.String
 	Phase          field.String
 	Seq            field.Uint64
@@ -77,6 +81,8 @@ func (t *taskSnapshot) updateTableName(table string) *taskSnapshot {
 	t.ALL = field.NewAsterisk(table)
 	t.ID = field.NewString(table, "id")
 	t.Goal = field.NewString(table, "goal")
+	t.ParentTaskID = field.NewString(table, "parent_task_id")
+	t.ReviewPlan = field.NewString(table, "review_plan")
 	t.Status = field.NewString(table, "status")
 	t.Phase = field.NewString(table, "phase")
 	t.Seq = field.NewUint64(table, "event_seq")
@@ -113,9 +119,11 @@ func (t *taskSnapshot) GetFieldByName(fieldName string) (field.OrderExpr, bool) 
 }
 
 func (t *taskSnapshot) fillFieldMap() {
-	t.fieldMap = make(map[string]field.Expr, 10)
+	t.fieldMap = make(map[string]field.Expr, 12)
 	t.fieldMap["id"] = t.ID
 	t.fieldMap["goal"] = t.Goal
+	t.fieldMap["parent_task_id"] = t.ParentTaskID
+	t.fieldMap["review_plan"] = t.ReviewPlan
 	t.fieldMap["status"] = t.Status
 	t.fieldMap["phase"] = t.Phase
 	t.fieldMap["event_seq"] = t.Seq
@@ -203,6 +211,8 @@ type ITaskSnapshotDo interface {
 	SetExecutionPhase(tenant string, id string, phase string) (err error)
 	FindExecutionSource(tenant string, id string, fingerprint string) (result []string, err error)
 	InsertExecutionSource(tenant string, id string, source string, title string, url string, excerpt string, fingerprint string) (err error)
+	InsertUploadedSource(tenant string, id string, source string, title string, url string, excerpt string, fingerprint string) (err error)
+	ListUploadedSources(tenant string, id string) (result []model.Source, err error)
 	PartialReportSources(tenant string, id string) (result []model.Source, err error)
 	InsertExecutionReport(tenant string, id string, markdown string, kind string) (err error)
 	InsertReportCitation(tenant string, id string, source string, ordinal int) (err error)
@@ -241,7 +251,13 @@ type ITaskSnapshotDo interface {
 	RemoveTaskEvents(tenant string, id string) (err error)
 	FindRequestKey(tenant string, keyHex string) (result []model.RequestKey, err error)
 	AddRequestKey(tenant string, id string, keyHex string, requestHex string) (err error)
-	AddTask(tenant string, id string, goal string) (err error)
+	AddTask(tenant string, id string, goal string, parentID string, review bool, snapshotPreferences bool) (err error)
+	ReadResearchPreferences(tenant string) (result []string, err error)
+	SaveResearchPreferences(tenant string, preferences string) (err error)
+	ClearResearchPreferences(tenant string) (err error)
+	PauseForPlanReview(tenant string, id string, plan string) (err error)
+	ApprovePlan(tenant string, id string, plan string, seq uint64) (err error)
+	CanFollowUp(tenant string, id string) (result []bool, err error)
 	SetTaskModel(tenant string, id string, version uint32) (err error)
 	AddOutbox(tenant string, id string) (err error)
 	AppendStatusEvent(tenant string, id string, seq uint64, payload string) (err error)
@@ -317,14 +333,51 @@ func (t taskSnapshotDo) InsertExecutionSource(tenant string, id string, source s
 	return
 }
 
-// SELECT source_id,title,canonical_url,excerpt FROM research_sources WHERE tenant_id=@tenant AND task_id=@id ORDER BY retrieved_at,source_id LIMIT 8
+// INSERT INTO research_sources(tenant_id,task_id,source_id,title,canonical_url,excerpt,fingerprint,source_type) VALUES(@tenant,@id,@source,@title,@url,@excerpt,UNHEX(@fingerprint),'upload')
+func (t taskSnapshotDo) InsertUploadedSource(tenant string, id string, source string, title string, url string, excerpt string, fingerprint string) (err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	params = append(params, id)
+	params = append(params, source)
+	params = append(params, title)
+	params = append(params, url)
+	params = append(params, excerpt)
+	params = append(params, fingerprint)
+	generateSQL.WriteString("INSERT INTO research_sources(tenant_id,task_id,source_id,title,canonical_url,excerpt,fingerprint,source_type) VALUES(?,?,?,?,?,?,UNHEX(?),'upload') ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=@tenant AND task_id=@id AND source_type='upload' ORDER BY retrieved_at,source_id
+func (t taskSnapshotDo) ListUploadedSources(tenant string, id string) (result []model.Source, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	params = append(params, id)
+	generateSQL.WriteString("SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=? AND task_id=? AND source_type='upload' ORDER BY retrieved_at,source_id ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=@tenant AND task_id=@id ORDER BY retrieved_at,source_id LIMIT 8
 func (t taskSnapshotDo) PartialReportSources(tenant string, id string) (result []model.Source, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, tenant)
 	params = append(params, id)
-	generateSQL.WriteString("SELECT source_id,title,canonical_url,excerpt FROM research_sources WHERE tenant_id=? AND task_id=? ORDER BY retrieved_at,source_id LIMIT 8 ")
+	generateSQL.WriteString("SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=? AND task_id=? ORDER BY retrieved_at,source_id LIMIT 8 ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
@@ -555,14 +608,14 @@ func (t taskSnapshotDo) SetEventSequence(tenant string, id string, seq uint64) (
 	return
 }
 
-// SELECT status,goal,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6) AS past_deadline,COALESCE(lease_until>UTC_TIMESTAMP(6),0) AS valid_lease,retry_count,TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),deadline_at)/1000000.0 AS remaining_seconds,COALESCE(model_version,0) AS model_version FROM research_tasks WHERE tenant_id=@tenant AND id=@id FOR UPDATE
+// SELECT status,goal,parent_task_id,CAST(preferences_snapshot AS CHAR) AS preferences_snapshot,requires_plan_review,CASE WHEN plan_approved THEN CAST(review_plan AS CHAR) END AS approved_plan,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6) AS past_deadline,COALESCE(lease_until>UTC_TIMESTAMP(6),0) AS valid_lease,retry_count,TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),deadline_at)/1000000.0 AS remaining_seconds,COALESCE(model_version,0) AS model_version FROM research_tasks WHERE tenant_id=@tenant AND id=@id FOR UPDATE
 func (t taskSnapshotDo) LockExecutionTask(tenant string, id string) (result []model.ExecutionTask, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, tenant)
 	params = append(params, id)
-	generateSQL.WriteString("SELECT status,goal,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6) AS past_deadline,COALESCE(lease_until>UTC_TIMESTAMP(6),0) AS valid_lease,retry_count,TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),deadline_at)/1000000.0 AS remaining_seconds,COALESCE(model_version,0) AS model_version FROM research_tasks WHERE tenant_id=? AND id=? FOR UPDATE ")
+	generateSQL.WriteString("SELECT status,goal,parent_task_id,CAST(preferences_snapshot AS CHAR) AS preferences_snapshot,requires_plan_review,CASE WHEN plan_approved THEN CAST(review_plan AS CHAR) END AS approved_plan,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6) AS past_deadline,COALESCE(lease_until>UTC_TIMESTAMP(6),0) AS valid_lease,retry_count,TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),deadline_at)/1000000.0 AS remaining_seconds,COALESCE(model_version,0) AS model_version FROM research_tasks WHERE tenant_id=? AND id=? FOR UPDATE ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
@@ -607,14 +660,14 @@ func (t taskSnapshotDo) RenewExecutionLease(tenant string, id string, epoch uint
 	return
 }
 
-// SELECT s.source_id,s.title,s.canonical_url,s.excerpt FROM report_citations c JOIN research_sources s ON s.tenant_id=c.tenant_id AND s.task_id=c.task_id AND s.source_id=c.source_id WHERE c.tenant_id=@tenant AND c.task_id=@id ORDER BY c.ordinal
+// SELECT s.source_id,s.title,s.canonical_url,s.excerpt,s.source_type FROM report_citations c JOIN research_sources s ON s.tenant_id=c.tenant_id AND s.task_id=c.task_id AND s.source_id=c.source_id WHERE c.tenant_id=@tenant AND c.task_id=@id ORDER BY c.ordinal
 func (t taskSnapshotDo) EvaluationSources(tenant string, id string) (result []model.Source, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, tenant)
 	params = append(params, id)
-	generateSQL.WriteString("SELECT s.source_id,s.title,s.canonical_url,s.excerpt FROM report_citations c JOIN research_sources s ON s.tenant_id=c.tenant_id AND s.task_id=c.task_id AND s.source_id=c.source_id WHERE c.tenant_id=? AND c.task_id=? ORDER BY c.ordinal ")
+	generateSQL.WriteString("SELECT s.source_id,s.title,s.canonical_url,s.excerpt,s.source_type FROM report_citations c JOIN research_sources s ON s.tenant_id=c.tenant_id AND s.task_id=c.task_id AND s.source_id=c.source_id WHERE c.tenant_id=? AND c.task_id=? ORDER BY c.ordinal ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
@@ -975,18 +1028,119 @@ func (t taskSnapshotDo) AddRequestKey(tenant string, id string, keyHex string, r
 	return
 }
 
-// INSERT INTO @@table (id,tenant_id,goal,status,deadline_at,event_seq,runtime_version) VALUES (@id,@tenant,@goal,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2')
-func (t taskSnapshotDo) AddTask(tenant string, id string, goal string) (err error) {
+// INSERT INTO @@table (id,tenant_id,goal,parent_task_id,requires_plan_review,preferences_snapshot,status,deadline_at,event_seq,runtime_version) VALUES (@id,@tenant,@goal,NULLIF(@parentID,”),@review,CASE WHEN @snapshotPreferences THEN (SELECT preferences FROM research_preferences WHERE tenant_id=@tenant) END,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2')
+func (t taskSnapshotDo) AddTask(tenant string, id string, goal string, parentID string, review bool, snapshotPreferences bool) (err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, id)
 	params = append(params, tenant)
 	params = append(params, goal)
-	generateSQL.WriteString("INSERT INTO research_tasks (id,tenant_id,goal,status,deadline_at,event_seq,runtime_version) VALUES (?,?,?,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2') ")
+	params = append(params, parentID)
+	params = append(params, review)
+	params = append(params, snapshotPreferences)
+	params = append(params, tenant)
+	generateSQL.WriteString("INSERT INTO research_tasks (id,tenant_id,goal,parent_task_id,requires_plan_review,preferences_snapshot,status,deadline_at,event_seq,runtime_version) VALUES (?,?,?,NULLIF(?,''),?,CASE WHEN ? THEN (SELECT preferences FROM research_preferences WHERE tenant_id=?) END,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2') ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// SELECT CAST(preferences AS CHAR) FROM research_preferences WHERE tenant_id=@tenant
+func (t taskSnapshotDo) ReadResearchPreferences(tenant string) (result []string, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	generateSQL.WriteString("SELECT CAST(preferences AS CHAR) FROM research_preferences WHERE tenant_id=? ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// INSERT INTO research_preferences(tenant_id,preferences) VALUES(@tenant,@preferences) AS incoming ON DUPLICATE KEY UPDATE preferences=incoming.preferences
+func (t taskSnapshotDo) SaveResearchPreferences(tenant string, preferences string) (err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	params = append(params, preferences)
+	generateSQL.WriteString("INSERT INTO research_preferences(tenant_id,preferences) VALUES(?,?) AS incoming ON DUPLICATE KEY UPDATE preferences=incoming.preferences ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// DELETE FROM research_preferences WHERE tenant_id=@tenant
+func (t taskSnapshotDo) ClearResearchPreferences(tenant string) (err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	generateSQL.WriteString("DELETE FROM research_preferences WHERE tenant_id=? ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// UPDATE research_tasks SET status='AWAITING_APPROVAL',phase=NULL,lease_until=NULL,review_plan=@plan WHERE tenant_id=@tenant AND id=@id
+func (t taskSnapshotDo) PauseForPlanReview(tenant string, id string, plan string) (err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, plan)
+	params = append(params, tenant)
+	params = append(params, id)
+	generateSQL.WriteString("UPDATE research_tasks SET status='AWAITING_APPROVAL',phase=NULL,lease_until=NULL,review_plan=? WHERE tenant_id=? AND id=? ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// UPDATE research_tasks SET status='QUEUED',review_plan=@plan,plan_approved=true,generation=generation+1,event_seq=@seq,deadline_at=UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE WHERE tenant_id=@tenant AND id=@id
+func (t taskSnapshotDo) ApprovePlan(tenant string, id string, plan string, seq uint64) (err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, plan)
+	params = append(params, seq)
+	params = append(params, tenant)
+	params = append(params, id)
+	generateSQL.WriteString("UPDATE research_tasks SET status='QUEUED',review_plan=?,plan_approved=true,generation=generation+1,event_seq=?,deadline_at=UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE WHERE tenant_id=? AND id=? ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
+	err = executeSQL.Error
+
+	return
+}
+
+// SELECT t.status IN ('SUCCEEDED','PARTIAL') AND EXISTS(SELECT 1 FROM research_reports r WHERE r.tenant_id=t.tenant_id AND r.task_id=t.id) FROM @@table t WHERE t.tenant_id=@tenant AND t.id=@id
+func (t taskSnapshotDo) CanFollowUp(tenant string, id string) (result []bool, err error) {
+	var params []interface{}
+
+	var generateSQL strings.Builder
+	params = append(params, tenant)
+	params = append(params, id)
+	generateSQL.WriteString("SELECT t.status IN ('SUCCEEDED','PARTIAL') AND EXISTS(SELECT 1 FROM research_reports r WHERE r.tenant_id=t.tenant_id AND r.task_id=t.id) FROM research_tasks t WHERE t.tenant_id=? AND t.id=? ")
+
+	var executeSQL *gorm.DB
+	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
 	err = executeSQL.Error
 
 	return
@@ -1009,14 +1163,14 @@ func (t taskSnapshotDo) SetTaskModel(tenant string, id string, version uint32) (
 	return
 }
 
-// INSERT INTO task_outbox(tenant_id,task_id,generation) VALUES (@tenant,@id,1)
+// INSERT INTO task_outbox(tenant_id,task_id,generation) SELECT tenant_id,id,generation FROM research_tasks WHERE tenant_id=@tenant AND id=@id
 func (t taskSnapshotDo) AddOutbox(tenant string, id string) (err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, tenant)
 	params = append(params, id)
-	generateSQL.WriteString("INSERT INTO task_outbox(tenant_id,task_id,generation) VALUES (?,?,1) ")
+	generateSQL.WriteString("INSERT INTO task_outbox(tenant_id,task_id,generation) SELECT tenant_id,id,generation FROM research_tasks WHERE tenant_id=? AND id=? ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Exec(generateSQL.String(), params...) // ignore_security_alert
@@ -1157,7 +1311,7 @@ func (t taskSnapshotDo) AbandonStartedAttempts(tenant string, id string) (err er
 	return
 }
 
-// SELECT source_id,title,canonical_url,excerpt FROM research_sources WHERE tenant_id=@tenant AND task_id=@id AND source_id=@source
+// SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=@tenant AND task_id=@id AND source_id=@source
 func (t taskSnapshotDo) FindSource(tenant string, id string, source string) (result []model.Source, err error) {
 	var params []interface{}
 
@@ -1165,7 +1319,7 @@ func (t taskSnapshotDo) FindSource(tenant string, id string, source string) (res
 	params = append(params, tenant)
 	params = append(params, id)
 	params = append(params, source)
-	generateSQL.WriteString("SELECT source_id,title,canonical_url,excerpt FROM research_sources WHERE tenant_id=? AND task_id=? AND source_id=? ")
+	generateSQL.WriteString("SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=? AND task_id=? AND source_id=? ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
@@ -1208,14 +1362,14 @@ func (t taskSnapshotDo) EventBatch(tenant string, id string, after uint64) (resu
 	return
 }
 
-// SELECT id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM @@table WHERE tenant_id=@tenant AND id=@id
+// SELECT id,goal,parent_task_id,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq,CASE WHEN status='AWAITING_APPROVAL' THEN CAST(review_plan AS CHAR) END AS review_plan FROM @@table WHERE tenant_id=@tenant AND id=@id
 func (t taskSnapshotDo) FindSnapshot(tenant string, id string) (result []model.TaskSnapshot, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, tenant)
 	params = append(params, id)
-	generateSQL.WriteString("SELECT id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM research_tasks WHERE tenant_id=? AND id=? ")
+	generateSQL.WriteString("SELECT id,goal,parent_task_id,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq,CASE WHEN status='AWAITING_APPROVAL' THEN CAST(review_plan AS CHAR) END AS review_plan FROM research_tasks WHERE tenant_id=? AND id=? ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
@@ -1224,13 +1378,13 @@ func (t taskSnapshotDo) FindSnapshot(tenant string, id string) (result []model.T
 	return
 }
 
-// SELECT id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM @@table WHERE tenant_id=@tenant ORDER BY created_at DESC,id DESC LIMIT 51
+// SELECT id,goal,parent_task_id,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM @@table WHERE tenant_id=@tenant ORDER BY created_at DESC,id DESC LIMIT 51
 func (t taskSnapshotDo) ListSnapshots(tenant string) (result []model.TaskSnapshot, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, tenant)
-	generateSQL.WriteString("SELECT id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM research_tasks WHERE tenant_id=? ORDER BY created_at DESC,id DESC LIMIT 51 ")
+	generateSQL.WriteString("SELECT id,goal,parent_task_id,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM research_tasks WHERE tenant_id=? ORDER BY created_at DESC,id DESC LIMIT 51 ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert
@@ -1239,14 +1393,14 @@ func (t taskSnapshotDo) ListSnapshots(tenant string) (result []model.TaskSnapsho
 	return
 }
 
-// SELECT t.id,t.goal,t.status,t.phase,t.event_seq,t.error_code,t.tokens_used,t.tokens_reserved,t.token_limit,t.min_event_seq FROM @@table t JOIN @@table anchor ON anchor.tenant_id=t.tenant_id AND anchor.id=@before WHERE t.tenant_id=@tenant AND (t.created_at<anchor.created_at OR (t.created_at=anchor.created_at AND t.id<anchor.id)) ORDER BY t.created_at DESC,t.id DESC LIMIT 51
+// SELECT t.id,t.goal,t.parent_task_id,t.status,t.phase,t.event_seq,t.error_code,t.tokens_used,t.tokens_reserved,t.token_limit,t.min_event_seq FROM @@table t JOIN @@table anchor ON anchor.tenant_id=t.tenant_id AND anchor.id=@before WHERE t.tenant_id=@tenant AND (t.created_at<anchor.created_at OR (t.created_at=anchor.created_at AND t.id<anchor.id)) ORDER BY t.created_at DESC,t.id DESC LIMIT 51
 func (t taskSnapshotDo) ListSnapshotsBefore(tenant string, before string) (result []model.TaskSnapshot, err error) {
 	var params []interface{}
 
 	var generateSQL strings.Builder
 	params = append(params, before)
 	params = append(params, tenant)
-	generateSQL.WriteString("SELECT t.id,t.goal,t.status,t.phase,t.event_seq,t.error_code,t.tokens_used,t.tokens_reserved,t.token_limit,t.min_event_seq FROM research_tasks t JOIN research_tasks anchor ON anchor.tenant_id=t.tenant_id AND anchor.id=? WHERE t.tenant_id=? AND (t.created_at<anchor.created_at OR (t.created_at=anchor.created_at AND t.id<anchor.id)) ORDER BY t.created_at DESC,t.id DESC LIMIT 51 ")
+	generateSQL.WriteString("SELECT t.id,t.goal,t.parent_task_id,t.status,t.phase,t.event_seq,t.error_code,t.tokens_used,t.tokens_reserved,t.token_limit,t.min_event_seq FROM research_tasks t JOIN research_tasks anchor ON anchor.tenant_id=t.tenant_id AND anchor.id=? WHERE t.tenant_id=? AND (t.created_at<anchor.created_at OR (t.created_at=anchor.created_at AND t.id<anchor.id)) ORDER BY t.created_at DESC,t.id DESC LIMIT 51 ")
 
 	var executeSQL *gorm.DB
 	executeSQL = t.UnderlyingDB().Raw(generateSQL.String(), params...).Find(&result) // ignore_security_alert

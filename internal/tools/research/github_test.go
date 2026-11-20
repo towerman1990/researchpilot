@@ -48,3 +48,89 @@ func TestGitHubFallbackRejectsUnverifiedCommit(t *testing.T) {
 		t.Fatal("arbitrary page text selected commit")
 	}
 }
+
+func TestGitHubScopedTreePinsNestedManifest(t *testing.T) {
+	commit, root, packages, module := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40), strings.Repeat("d", 40)
+	const api = "/repos/example/project"
+	const scope = "packages/示例 模块"
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	var readManifest bool
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body string
+		switch req.URL.Path {
+		case api:
+			body = "{\"default_branch\":\"main\",\"visibility\":\"public\"}"
+		case api + "/commits/main":
+			body = "{\"sha\":\"" + commit + "\",\"commit\":{\"tree\":{\"sha\":\"" + root + "\"}}}"
+		case api + "/git/trees/" + root:
+			body = "{\"tree\":[{\"path\":\"packages\",\"type\":\"tree\",\"sha\":\"" + packages + "\"}]}"
+		case api + "/git/trees/" + packages:
+			body = "{\"tree\":[{\"path\":\"示例 模块\",\"type\":\"tree\",\"sha\":\"" + module + "\"}]}"
+		case api + "/git/trees/" + module:
+			if req.URL.Query().Get("recursive") != "1" {
+				t.Fatal("expected recursive scope listing")
+			}
+			body = "{\"tree\":[{\"path\":\"src\",\"type\":\"tree\"},{\"path\":\"src/main.go\",\"type\":\"blob\",\"mode\":\"100644\"},{\"path\":\"service/go.mod\",\"type\":\"blob\",\"mode\":\"100644\",\"size\":90},{\"path\":\"link/package.json\",\"type\":\"blob\",\"mode\":\"120000\"},{\"path\":\"vendor/other/go.mod\",\"type\":\"blob\",\"mode\":\"100644\"}]}"
+		case api + "/contents/" + scope + "/service/go.mod":
+			if req.URL.Query().Get("ref") != commit {
+				t.Fatal("dependency manifest is not pinned to the resolved commit")
+			}
+			readManifest = true
+			body = "module example/service\nrequire example/dependency v1.2.3\n"
+		default:
+			t.Fatalf("unexpected read: %s", req.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+	})}
+	sources, err := NewRegistry(client).Execute(t.Context(), toolcontract.Input{Tool: "github_repo", Owner: "example", Repo: "project", Path: scope})
+	if err != nil || !readManifest || len(sources) != 2 {
+		t.Fatalf("scoped sources: %v %v", sources, err)
+	}
+	if !strings.Contains(sources[0].URL, "/tree/"+commit+"/packages/") ||
+		!strings.Contains(sources[0].Excerpt, "src/main.go") ||
+		strings.Contains(sources[0].Excerpt, "vendor/") ||
+		!strings.Contains(sources[1].URL, "/blob/"+commit+"/packages/") ||
+		!strings.Contains(sources[1].Excerpt, "example/dependency v1.2.3") {
+		t.Fatalf("missing or misleading repository evidence: %+v", sources)
+	}
+}
+
+func TestGitHubTruncatedTreeUsesShallowDirectory(t *testing.T) {
+	commit, root := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	const api = "/repos/example/project"
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := ""
+		status := 200
+		switch req.URL.Path {
+		case api:
+			body = "{\"default_branch\":\"main\",\"visibility\":\"public\"}"
+		case api + "/commits/main":
+			body = "{\"sha\":\"" + commit + "\",\"commit\":{\"tree\":{\"sha\":\"" + root + "\"}}}"
+		case api + "/readme":
+			status = 404
+		case api + "/git/trees/" + root:
+			if req.URL.Query().Get("recursive") == "1" {
+				body = "{\"truncated\":true,\"tree\":[{\"path\":\"partial/nested\",\"type\":\"tree\"}]}"
+			} else {
+				body = "{\"tree\":[{\"path\":\"cmd\",\"type\":\"tree\"}]}"
+			}
+		default:
+			t.Fatalf("unexpected read: %s", req.URL)
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+	})}
+	sources, err := NewRegistry(client).Execute(t.Context(), toolcontract.Input{Tool: "github_repo", Owner: "example", Repo: "project"})
+	if err != nil || len(sources) != 1 || !strings.Contains(sources[0].Excerpt, "Only the immediate directory") ||
+		!strings.Contains(sources[0].Excerpt, "cmd/") || strings.Contains(sources[0].Excerpt, "partial/nested") {
+		t.Fatalf("shallow fallback evidence: %v %v", sources, err)
+	}
+}
+
+func TestGitHubRejectsUnsafeDirectory(t *testing.T) {
+	for _, directory := range []string{"a/../b", "/etc", "a//b", "a\\b", "a/%2e%2e", "a\nb"} {
+		if (toolcontract.Input{Tool: "github_repo", Owner: "example", Repo: "project", Path: directory}).Validate() == nil {
+			t.Fatalf("invalid scoped directory accepted: %q", directory)
+		}
+	}
+}

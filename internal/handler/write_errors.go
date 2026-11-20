@@ -15,9 +15,11 @@ var writeErrors = []struct {
 	status int
 }{
 	{taskservice.ErrInvalidTask, 422}, {taskservice.ErrIdempotencyConflict, 409}, {service.ErrTrialExhausted, 409},
-	{service.ErrTrialUnavailable, 503}, {taskservice.ErrModelRevoked, 409}, {taskservice.ErrTaskNotFound, 404}, {taskservice.ErrTaskFinished, 409},
+	{service.ErrTrialUnavailable, 503}, {taskservice.ErrModelRevoked, 409}, {taskservice.ErrTaskNotFound, 404}, {taskservice.ErrTaskFinished, 409}, {taskservice.ErrReportNotReady, 409},
+	{taskservice.ErrInvalidPlan, 422}, {taskservice.ErrInvalidPreferences, 422}, {taskservice.ErrInvalidMaterials, 422}, {taskservice.ErrPlanNotAwaiting, 409},
 	{service.ErrInvalidModelConfig, 422}, {service.ErrModelHostForbidden, 422}, {service.ErrInvalidAPIKey, 422},
 	{service.ErrModelEncryption, 503}, {service.ErrAPIKeyRequired, 422}, {service.ErrModelKeyUnavailable, 409},
+	{service.ErrModelProfileNotFound, 404}, {service.ErrModelProfileChanged, 409},
 	{service.ErrModelNotConfigured, 409}, {service.ErrModelUnavailable, 503},
 }
 

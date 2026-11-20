@@ -16,6 +16,17 @@ function newRequestID() {
 const errors = {
   invalid_credentials:'请检查邮箱和密码。注册密码至少需要 10 字节。',
   registration_conflict:'这个邮箱已注册，请直接登录。',
+  invalid_research_materials:'每项任务最多两份 UTF-8 文本资料，每份最多 24 KiB。请检查文件名和内容。',
+  model_profile_not_found:'找不到这套可用的模型配置。',
+  model_profile_changed:'当前配置已变化，请刷新模型设置后再编辑。',
+  api_key_required:'新增配置或更换 Base URL 时，请填写对应的 API Key。',
+  invalid_research_preferences:'请选择有效的研究偏好。',
+  invalid_plan:'计划内容不符合要求，请检查每一步的资料来源。',
+  invalid_plan_schema:'没能生成可审批的计划，请调整目标后重试。',
+  plan_not_awaiting_approval:'计划状态已变化，请查看最新任务进度。',
+  model_not_configured:'请配置模型或使用平台试用后再生成待审批计划。',
+  report_not_ready:'请从已生成报告的任务发起追问。',
+  task_not_found:'找不到这项研究任务。',
   invalid_task_request:'请输入 1 到 2000 字的研究目标。',
   idempotency_conflict:'这次提交的内容已变化，请重新提交。',
   insufficient_evidence:'已取得的资料不足以支撑完整回答，已保留部分成果。',
@@ -94,6 +105,8 @@ function App() {
   const [busy,setBusy] = useState(false);
   const [connection,setConnection] = useState('');
   const [settings,setSettings] = useState(false);
+  const [preferences,setPreferences] = useState(null);
+  const [preferencesError,setPreferencesError] = useState(false);
   const [modelInfo,setModelInfo] = useState(null);
   const requestKey = useRef(null);
 
@@ -122,6 +135,8 @@ function App() {
     setHistoryBusy(false);
     setGoal('');
     setSettings(false);
+    setPreferences(null);
+    setPreferencesError(false);
     setModelInfo(null);
     setBusy(false);
     setError(message);
@@ -159,6 +174,34 @@ function App() {
     return ()=>{active=false;};
   },[user,settings,selected]);
 
+  async function loadPreferences() {
+    const scope = sessionScope.current;
+    setPreferencesError(false);
+    try {
+      const value = await api('/api/v1/research/preferences');
+      if (sessionScope.current === scope) setPreferences(value);
+    } catch (e) {
+      if (sessionScope.current === scope) setPreferencesError(true);
+      handleSessionError(scope, e);
+    }
+  }
+
+  useEffect(() => {
+    if (user && settings === 'preferences') void loadPreferences();
+  }, [user, settings]);
+
+  async function savePreferences(value) {
+    const scope = sessionScope.current;
+    let saved = false;
+    await runSettingsOperation(
+      () => requestJSON('/api/v1/research/preferences', {
+        method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(value)
+      }),
+      ({data}) => { setPreferences(data); saved = true; },
+    );
+    return saved && sessionScope.current === scope;
+  }
+
   async function loadMoreHistory() {
     if (!historyCursor || historyLoading.current) return;
     const scope = sessionScope.current;
@@ -179,7 +222,7 @@ function App() {
     }
   }
 
-  async function runModelOperation(request, apply) {
+  async function runSettingsOperation(request, apply) {
     const scope = sessionScope.current;
     setBusy(true);
     setError('');
@@ -193,20 +236,30 @@ function App() {
     }
   }
 
-  async function saveModel(event) {
+  async function saveModel(event, newProfile, expectedVersion) {
     event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    await runModelOperation(
-      () => requestJSON('/api/v1/model-config', {
+    const form = new FormData(event.currentTarget);
+    let stored = false;
+    await runSettingsOperation(async () => {
+      await requestJSON('/api/v1/model-config', {
         method:'PUT', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({base_url:form.get('base_url'),model:form.get('model'),api_key:form.get('api_key')})
-      }),
-      () => {
-        formElement.reset();
-        setSettings(false);
-        setModelInfo(null);
-      },
+        body:JSON.stringify({
+          base_url:form.get('base_url'),model:form.get('model'),api_key:form.get('api_key'),
+          label:form.get('label'),new_profile:newProfile,expected_version:expectedVersion,
+        }),
+      });
+      return api('/api/v1/model-config');
+    }, status => {
+      setModelInfo(status);
+      stored = true;
+    });
+    return stored;
+  }
+
+  function activateModel(profileID) {
+    return runSettingsOperation(
+      () => api('/api/v1/model-config/activate',{profile_id:profileID}),
+      setModelInfo,
     );
   }
 
@@ -281,6 +334,8 @@ function App() {
             stream = null;
             setConnection('');
             void refresh(ticket);
+          } else if (type === 'task_status' && value.payload.status === 'AWAITING_APPROVAL') {
+            void refresh(ticket);
           }
         });
       }
@@ -311,22 +366,56 @@ function App() {
     finally { setBusy(false); }
   }
 
-  async function submit(event) {
+  async function submit(event, reviewPlan, attachments) {
     event.preventDefault();
+    await submitTask(goal, '', reviewPlan, attachments);
+  }
+
+  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = []) {
     setBusy(true); setError('');
-    const value = goal.trim();
-    if (requestKey.current?.goal !== value) requestKey.current = {goal:value,id:newRequestID()};
+    const value = question.trim();
+    const attachmentKey = JSON.stringify(attachments);
+    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.attachmentKey !== attachmentKey) {
+      requestKey.current = {goal:value,parentTaskID,reviewPlan,attachmentKey,id:newRequestID()};
+    }
+    const request = requestKey.current;
     const scope = sessionScope.current;
+    const source = selection.current;
     try {
-      const created = await api(path,{goal:value},{'Idempotency-Key':requestKey.current.id});
+      const payload = {goal:value};
+      if (parentTaskID) payload.parent_task_id = parentTaskID;
+      if (reviewPlan) payload.review_plan = true;
+      if (attachments.length) payload.attachments = attachments;
+      const created = await api(path,payload,{'Idempotency-Key':request.id});
       if (sessionScope.current !== scope) return;
-      select(created.task_id);
-      setTask(created);
+      if (selection.current === source) {
+        select(created.task_id);
+        setTask(created);
+      }
       setHistory(old => [created,...old.filter(item => item.task_id !== created.task_id)]);
-      setGoal('');
-      requestKey.current = null;
+      if (!parentTaskID) setGoal('');
+      if (requestKey.current === request) requestKey.current = null;
     } catch (e) {
       handleSessionError(scope, e);
+    } finally {
+      if (sessionScope.current === scope) setBusy(false);
+    }
+  }
+
+  async function approvePlan(plan, sequence) {
+    const current = selection.current;
+    const scope = sessionScope.current;
+    setBusy(true); setError('');
+    try {
+      const updated = await api(path+'/'+current.id+'/plan/approve',{event_seq:sequence,plan});
+      if (selection.current === current) {
+        setTask(old => mergeTaskSnapshot(old, updated, current.id));
+      }
+      if (sessionScope.current === scope) {
+        setHistory(old => old.map(item => mergeTaskSnapshot(item, updated, item.task_id)));
+      }
+    } catch (error) {
+      handleSessionError(scope, error);
     } finally {
       if (sessionScope.current === scope) setBusy(false);
     }
@@ -360,18 +449,18 @@ function App() {
   }
 
   function probeModel() {
-    return runModelOperation(
+    return runSettingsOperation(
       () => api('/api/v1/model-config/probe', {}),
       result => setModelInfo(old => ({...old,...result})),
     );
   }
 
   function revokeModel() {
-    return runModelOperation(
+    return runSettingsOperation(
       () => requestJSON('/api/v1/model-config', {
         method:'DELETE', headers:{'Content-Type':'application/json'}, body:'{}',
       }),
-      ({data}) => setModelInfo(old => ({...old,...data,capabilities:undefined,errors:undefined})),
+      ({data}) => setModelInfo(old => ({...old,...data,profiles:[],capabilities:undefined,errors:undefined})),
     );
   }
 
@@ -392,7 +481,7 @@ function App() {
     }}>重试</button></div> : <p role="status">正在检查登录状态</p>}
   </main>;
   if (!user) return <AuthView {...{register,setRegister,authenticate,error,setError,busy}}/>;
-  return <Workspace {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,busy,saveModel,probeModel,revokeModel,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
+  return <Workspace readSource={api} {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,submitTask,approvePlan,busy,saveModel,activateModel,probeModel,revokeModel,preferences,preferencesError,loadPreferences,savePreferences,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
 }
 
 createRoot(document.getElementById('root')).render(<App/>);

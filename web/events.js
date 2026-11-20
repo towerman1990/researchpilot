@@ -23,9 +23,9 @@ export function applyTaskEvent(current, event) {
     ...current,
     calls,
     event_seq: event.seq,
-    status: payload.status && ['QUEUED','RUNNING','RETRY_WAIT','CANCELLING','SUCCEEDED','FAILED','PARTIAL','CANCELLED'].includes(payload.status)
+    status: payload.status && ['QUEUED','RUNNING','AWAITING_APPROVAL','RETRY_WAIT','CANCELLING','SUCCEEDED','FAILED','PARTIAL','CANCELLED'].includes(payload.status)
       && event.type !== 'tool_finished' ? payload.status : current.status,
-    phase: terminal(payload.status)&&event.type!=='tool_finished'?null:(payload.phase ?? current.phase),
+    phase: (terminal(payload.status)||payload.status==='AWAITING_APPROVAL')&&event.type!=='tool_finished'?null:(payload.phase ?? current.phase),
     error_code: payload.error_code || current.error_code,
   };
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	taskservice "researchpilot/internal/task"
 
@@ -22,6 +23,8 @@ type Tasks struct {
 func (h Tasks) RegisterRoutes(r route.IRouter) {
 	g := r.Group("/api/v1/research/tasks", h.Auth.apiHeaders, h.Auth.requireSession)
 	g.GET("", h.list)
+	r.GET("/api/v1/research/preferences", h.Auth.apiHeaders, h.Auth.requireSession, h.getPreferences)
+	r.PUT("/api/v1/research/preferences", h.Auth.requireJSON, h.Auth.requireSession, h.putPreferences)
 	g.GET("/:id", h.get)
 	g.GET("/:id/report", h.report)
 	g.GET("/:id/events", h.events)
@@ -29,6 +32,7 @@ func (h Tasks) RegisterRoutes(r route.IRouter) {
 	writes := r.Group("/api/v1/research/tasks", h.Auth.requireJSON, h.Auth.requireSession)
 	writes.POST("", h.submit)
 	writes.POST("/:id/cancel", h.cancel)
+	writes.POST("/:id/plan/approve", h.approvePlan)
 }
 func (h Tasks) list(ctx context.Context, c *app.RequestContext) {
 	rows, next, err := h.Service.List(ctx, c.GetString(tenantKey), c.Query("before"))
@@ -92,17 +96,38 @@ func (h Tasks) submit(ctx context.Context, c *app.RequestContext) {
 	if !h.Auth.allow(ctx, c, "task-create", tenant, envconfig.Int("RATE_TASK_CREATE", 10, 1, 10000)) {
 		return
 	}
-	var input struct{ Goal string }
-	if !parseJSON(c, &input) {
+	var input struct {
+		Goal         string                 `json:"goal"`
+		ParentTaskID string                 `json:"parent_task_id"`
+		ReviewPlan   bool                   `json:"review_plan"`
+		Attachments  []taskservice.Material `json:"attachments"`
+	}
+	if !parseJSONLimit(c, &input, 320<<10) {
 		return
 	}
-	task, err := h.Actions.Submit(ctx, tenant, string(c.GetHeader("Idempotency-Key")), input.Goal)
+	task, err := h.Actions.Submit(ctx, tenant, string(c.GetHeader("Idempotency-Key")), input.Goal, input.ParentTaskID, input.ReviewPlan, input.Attachments...)
 	if err != nil {
 		writeFailure(c, err)
 		return
 	}
 	c.Header("Location", "/api/v1/research/tasks/"+task.ID)
 	c.JSON(202, task)
+}
+
+func (h Tasks) approvePlan(ctx context.Context, c *app.RequestContext) {
+	var input struct {
+		Seq  uint64          `json:"event_seq,string"`
+		Plan json.RawMessage `json:"plan"`
+	}
+	if !parseJSONLimit(c, &input, 33024) {
+		return
+	}
+	snapshot, err := h.Actions.ApprovePlan(ctx, c.GetString(tenantKey), c.Param("id"), input.Seq, input.Plan)
+	if err != nil {
+		writeFailure(c, err)
+		return
+	}
+	c.JSON(202, snapshot)
 }
 
 func (h Tasks) cancel(ctx context.Context, c *app.RequestContext) {

@@ -10,7 +10,7 @@ func (s *Store) EvaluationTenants(ctx context.Context) ([]string, error) {
 }
 func (s *Store) EvaluationCreate(ctx context.Context, tenant, id, goal string, version uint32) error {
 	return s.Write(ctx, tenant, false, func(tx WriteTx) error {
-		if err := tx.AddTask(tenant, id, goal); err != nil {
+		if err := tx.AddTask(tenant, id, goal, "", false, false); err != nil {
 			return err
 		}
 		if err := tx.SetTaskModel(tenant, id, version); err != nil {

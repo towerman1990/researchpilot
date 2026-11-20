@@ -19,6 +19,7 @@ func (h Models) RegisterRoutes(r route.IRouter) {
 	r.GET("/api/v1/model-config", h.Auth.apiHeaders, h.Auth.requireSession, h.status)
 	r.DELETE("/api/v1/model-config", h.Auth.requireJSON, h.Auth.requireSession, h.revoke)
 	r.PUT("/api/v1/model-config", h.Auth.requireJSON, h.Auth.requireSession, h.save)
+	r.POST("/api/v1/model-config/activate", h.Auth.requireJSON, h.Auth.requireSession, h.activate)
 	r.POST("/api/v1/model-config/probe", h.Auth.requireJSON, h.Auth.requireSession, h.probe)
 }
 func (h Models) status(ctx context.Context, c *app.RequestContext) {
@@ -48,6 +49,20 @@ func (h Models) save(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(200, map[string]any{"configured": true, "version": version})
+}
+
+func (h Models) activate(ctx context.Context, c *app.RequestContext) {
+	var input struct {
+		ProfileID uint32 `json:"profile_id"`
+	}
+	if !parseJSON(c, &input) {
+		return
+	}
+	if err := h.Service.ActivateProfile(ctx, c.GetString(tenantKey), input.ProfileID); err != nil {
+		writeFailure(c, err)
+		return
+	}
+	h.status(ctx, c)
 }
 
 func (h Models) probe(ctx context.Context, c *app.RequestContext) {

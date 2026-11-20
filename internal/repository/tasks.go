@@ -65,6 +65,10 @@ func (s *Store) ReadEventBatch(ctx context.Context, tenant, id string, after uin
 	return rows[0].EventPosition, batch, nil
 }
 
+func (s *Store) UploadedSources(ctx context.Context, tenant, id string) ([]model.Source, error) {
+	return s.q.TaskSnapshot.WithContext(ctx).ListUploadedSources(tenant, id)
+}
+
 func (s *Store) ReadSource(ctx context.Context, tenant, id, source string) (model.Source, error) {
 	rows, err := s.q.TaskSnapshot.WithContext(ctx).FindSource(tenant, id, source)
 	if err != nil {

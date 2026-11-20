@@ -24,7 +24,11 @@ type taskCommands interface {
 	FindExecutionSource(tenant, id, fingerprint string) ([]string, error)
 	// INSERT INTO research_sources(tenant_id,task_id,source_id,title,canonical_url,excerpt,fingerprint) VALUES(@tenant,@id,@source,@title,@url,@excerpt,UNHEX(@fingerprint))
 	InsertExecutionSource(tenant, id, source, title, url, excerpt, fingerprint string) error
-	// SELECT source_id,title,canonical_url,excerpt FROM research_sources WHERE tenant_id=@tenant AND task_id=@id ORDER BY retrieved_at,source_id LIMIT 8
+	// INSERT INTO research_sources(tenant_id,task_id,source_id,title,canonical_url,excerpt,fingerprint,source_type) VALUES(@tenant,@id,@source,@title,@url,@excerpt,UNHEX(@fingerprint),'upload')
+	InsertUploadedSource(tenant, id, source, title, url, excerpt, fingerprint string) error
+	// SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=@tenant AND task_id=@id AND source_type='upload' ORDER BY retrieved_at,source_id
+	ListUploadedSources(tenant, id string) ([]model.Source, error)
+	// SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=@tenant AND task_id=@id ORDER BY retrieved_at,source_id LIMIT 8
 	PartialReportSources(tenant, id string) ([]model.Source, error)
 	// INSERT INTO research_reports(tenant_id,task_id,markdown,kind) VALUES(@tenant,@id,@markdown,@kind)
 	InsertExecutionReport(tenant, id, markdown, kind string) error
@@ -55,14 +59,14 @@ type taskCommands interface {
 	// UPDATE research_tasks SET event_seq=@seq WHERE tenant_id=@tenant AND id=@id
 	SetEventSequence(tenant, id string, seq uint64) error
 
-	// SELECT status,goal,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6) AS past_deadline,COALESCE(lease_until>UTC_TIMESTAMP(6),0) AS valid_lease,retry_count,TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),deadline_at)/1000000.0 AS remaining_seconds,COALESCE(model_version,0) AS model_version FROM research_tasks WHERE tenant_id=@tenant AND id=@id FOR UPDATE
+	// SELECT status,goal,parent_task_id,CAST(preferences_snapshot AS CHAR) AS preferences_snapshot,requires_plan_review,CASE WHEN plan_approved THEN CAST(review_plan AS CHAR) END AS approved_plan,generation,lease_epoch,event_seq,deadline_at<=UTC_TIMESTAMP(6) AS past_deadline,COALESCE(lease_until>UTC_TIMESTAMP(6),0) AS valid_lease,retry_count,TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),deadline_at)/1000000.0 AS remaining_seconds,COALESCE(model_version,0) AS model_version FROM research_tasks WHERE tenant_id=@tenant AND id=@id FOR UPDATE
 	LockExecutionTask(tenant, id string) ([]model.ExecutionTask, error)
 	// UPDATE research_tasks SET status='RUNNING',phase='planning',lease_epoch=@epoch,event_seq=@seq,lease_until=UTC_TIMESTAMP(6)+INTERVAL 30 SECOND WHERE tenant_id=@tenant AND id=@id
 	ClaimExecutionTask(tenant, id string, epoch uint32, seq uint64) error
 	// UPDATE research_tasks SET lease_until=LEAST(deadline_at,UTC_TIMESTAMP(6)+INTERVAL 30 SECOND) WHERE tenant_id=@tenant AND id=@id AND status='RUNNING' AND lease_epoch=@epoch AND lease_until>UTC_TIMESTAMP(6) AND deadline_at>UTC_TIMESTAMP(6) AND (model_version IS NULL OR EXISTS(SELECT 1 FROM model_configs m WHERE m.tenant_id=research_tasks.tenant_id AND m.version=research_tasks.model_version AND m.revoked=false))
 	RenewExecutionLease(tenant, id string, epoch uint32) (gen.RowsAffected, error)
 
-	// SELECT s.source_id,s.title,s.canonical_url,s.excerpt FROM report_citations c JOIN research_sources s ON s.tenant_id=c.tenant_id AND s.task_id=c.task_id AND s.source_id=c.source_id WHERE c.tenant_id=@tenant AND c.task_id=@id ORDER BY c.ordinal
+	// SELECT s.source_id,s.title,s.canonical_url,s.excerpt,s.source_type FROM report_citations c JOIN research_sources s ON s.tenant_id=c.tenant_id AND s.task_id=c.task_id AND s.source_id=c.source_id WHERE c.tenant_id=@tenant AND c.task_id=@id ORDER BY c.ordinal
 	EvaluationSources(tenant, id string) ([]model.Source, error)
 	// SELECT COUNT(*) FROM report_citations WHERE tenant_id=@tenant AND task_id=@id
 	EvaluationCitationCount(tenant, id string) ([]int, error)
@@ -108,11 +112,23 @@ type taskCommands interface {
 	FindRequestKey(tenant, keyHex string) ([]model.RequestKey, error)
 	// INSERT INTO request_keys(tenant_id,key_digest,request_digest,task_id) VALUES (@tenant,UNHEX(@keyHex),UNHEX(@requestHex),@id)
 	AddRequestKey(tenant, id, keyHex, requestHex string) error
-	// INSERT INTO @@table (id,tenant_id,goal,status,deadline_at,event_seq,runtime_version) VALUES (@id,@tenant,@goal,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2')
-	AddTask(tenant, id, goal string) error
+	// INSERT INTO @@table (id,tenant_id,goal,parent_task_id,requires_plan_review,preferences_snapshot,status,deadline_at,event_seq,runtime_version) VALUES (@id,@tenant,@goal,NULLIF(@parentID,''),@review,CASE WHEN @snapshotPreferences THEN (SELECT preferences FROM research_preferences WHERE tenant_id=@tenant) END,'QUEUED',UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE,1,'m2.2')
+	AddTask(tenant, id, goal, parentID string, review, snapshotPreferences bool) error
+	// SELECT CAST(preferences AS CHAR) FROM research_preferences WHERE tenant_id=@tenant
+	ReadResearchPreferences(tenant string) ([]string, error)
+	// INSERT INTO research_preferences(tenant_id,preferences) VALUES(@tenant,@preferences) AS incoming ON DUPLICATE KEY UPDATE preferences=incoming.preferences
+	SaveResearchPreferences(tenant, preferences string) error
+	// DELETE FROM research_preferences WHERE tenant_id=@tenant
+	ClearResearchPreferences(tenant string) error
+	// UPDATE research_tasks SET status='AWAITING_APPROVAL',phase=NULL,lease_until=NULL,review_plan=@plan WHERE tenant_id=@tenant AND id=@id
+	PauseForPlanReview(tenant, id, plan string) error
+	// UPDATE research_tasks SET status='QUEUED',review_plan=@plan,plan_approved=true,generation=generation+1,event_seq=@seq,deadline_at=UTC_TIMESTAMP(6)+INTERVAL 5 MINUTE WHERE tenant_id=@tenant AND id=@id
+	ApprovePlan(tenant, id, plan string, seq uint64) error
+	// SELECT t.status IN ('SUCCEEDED','PARTIAL') AND EXISTS(SELECT 1 FROM research_reports r WHERE r.tenant_id=t.tenant_id AND r.task_id=t.id) FROM @@table t WHERE t.tenant_id=@tenant AND t.id=@id
+	CanFollowUp(tenant, id string) ([]bool, error)
 	// UPDATE @@table SET model_version=@version WHERE tenant_id=@tenant AND id=@id
 	SetTaskModel(tenant, id string, version uint32) error
-	// INSERT INTO task_outbox(tenant_id,task_id,generation) VALUES (@tenant,@id,1)
+	// INSERT INTO task_outbox(tenant_id,task_id,generation) SELECT tenant_id,id,generation FROM research_tasks WHERE tenant_id=@tenant AND id=@id
 	AddOutbox(tenant, id string) error
 	// INSERT INTO task_events(tenant_id,task_id,seq,event_type,payload) VALUES (@tenant,@id,@seq,'task_status',@payload)
 	AppendStatusEvent(tenant, id string, seq uint64, payload string) error
@@ -130,7 +146,7 @@ type taskCommands interface {
 	SettleReservedAttempts(tenant, id string) error
 	// UPDATE execution_attempts SET status='ABANDONED',finished_at=UTC_TIMESTAMP(6) WHERE tenant_id=@tenant AND task_id=@id AND status='STARTED'
 	AbandonStartedAttempts(tenant, id string) error
-	// SELECT source_id,title,canonical_url,excerpt FROM research_sources WHERE tenant_id=@tenant AND task_id=@id AND source_id=@source
+	// SELECT source_id,title,canonical_url,excerpt,source_type FROM research_sources WHERE tenant_id=@tenant AND task_id=@id AND source_id=@source
 	FindSource(tenant, id, source string) ([]model.Source, error)
 
 	// SELECT status,event_seq AS latest_seq,min_event_seq AS min_seq FROM @@table WHERE tenant_id=@tenant AND id=@id
@@ -138,11 +154,11 @@ type taskCommands interface {
 	// SELECT t.status,t.event_seq AS latest_seq,t.min_event_seq AS min_seq,e.seq,e.event_type AS kind,e.payload,DATE_FORMAT(e.created_at,'%Y-%m-%dT%H:%i:%s.%fZ') AS timestamp FROM @@table t LEFT JOIN task_events e ON e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.seq>@after AND (CAST(@after AS DECIMAL(21,0))+1>=t.min_event_seq) WHERE t.tenant_id=@tenant AND t.id=@id ORDER BY e.seq LIMIT 100
 	EventBatch(tenant, id string, after uint64) ([]model.EventBatchRow, error)
 
-	// SELECT id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM @@table WHERE tenant_id=@tenant AND id=@id
+	// SELECT id,goal,parent_task_id,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq,CASE WHEN status='AWAITING_APPROVAL' THEN CAST(review_plan AS CHAR) END AS review_plan FROM @@table WHERE tenant_id=@tenant AND id=@id
 	FindSnapshot(tenant, id string) ([]model.TaskSnapshot, error)
-	// SELECT id,goal,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM @@table WHERE tenant_id=@tenant ORDER BY created_at DESC,id DESC LIMIT 51
+	// SELECT id,goal,parent_task_id,status,phase,event_seq,error_code,tokens_used,tokens_reserved,token_limit,min_event_seq FROM @@table WHERE tenant_id=@tenant ORDER BY created_at DESC,id DESC LIMIT 51
 	ListSnapshots(tenant string) ([]model.TaskSnapshot, error)
-	// SELECT t.id,t.goal,t.status,t.phase,t.event_seq,t.error_code,t.tokens_used,t.tokens_reserved,t.token_limit,t.min_event_seq FROM @@table t JOIN @@table anchor ON anchor.tenant_id=t.tenant_id AND anchor.id=@before WHERE t.tenant_id=@tenant AND (t.created_at<anchor.created_at OR (t.created_at=anchor.created_at AND t.id<anchor.id)) ORDER BY t.created_at DESC,t.id DESC LIMIT 51
+	// SELECT t.id,t.goal,t.parent_task_id,t.status,t.phase,t.event_seq,t.error_code,t.tokens_used,t.tokens_reserved,t.token_limit,t.min_event_seq FROM @@table t JOIN @@table anchor ON anchor.tenant_id=t.tenant_id AND anchor.id=@before WHERE t.tenant_id=@tenant AND (t.created_at<anchor.created_at OR (t.created_at=anchor.created_at AND t.id<anchor.id)) ORDER BY t.created_at DESC,t.id DESC LIMIT 51
 	ListSnapshotsBefore(tenant, before string) ([]model.TaskSnapshot, error)
 	// SELECT a.step_key,a.attempt_no,a.status FROM execution_attempts a WHERE a.tenant_id=@tenant AND a.task_id=@id AND a.attempt_no=(SELECT MAX(b.attempt_no) FROM execution_attempts b WHERE b.tenant_id=a.tenant_id AND b.task_id=a.task_id AND b.step_key=a.step_key) ORDER BY a.step_key
 	LatestCalls(tenant, id string) ([]model.CallSnapshot, error)
@@ -151,13 +167,13 @@ type taskCommands interface {
 }
 
 type modelCommands interface {
-	// SELECT DISTINCT tenant_id FROM model_configs m WHERE revoked=false AND is_trial=false AND version=(SELECT MAX(version) FROM model_configs n WHERE n.tenant_id=m.tenant_id AND n.is_trial=false)
+	// SELECT p.tenant_id FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.is_active=true AND m.revoked=false AND m.is_trial=false
 	EvaluationTenants() ([]string, error)
 
 	// SELECT revoked FROM @@table WHERE tenant_id=@tenant AND version=@version
 	ModelRevoked(tenant string, version uint32) ([]bool, error)
 
-	// SELECT COALESCE(MAX(version),0) FROM @@table WHERE tenant_id=@tenant AND is_trial=false AND revoked=false
+	// SELECT COALESCE(MAX(m.version),0) FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND p.is_active=true AND m.is_trial=false AND m.revoked=false
 	ActiveVersion(tenant string) ([]uint32, error)
 	// SELECT COALESCE(MAX(version),0)+1 FROM @@table WHERE tenant_id=@tenant
 	NextVersion(tenant string) ([]uint32, error)
@@ -177,6 +193,16 @@ type modelCommands interface {
 	LatestPersonalModel(tenant string) ([]model.ModelSummary, error)
 	// UPDATE @@table SET revoked=true WHERE tenant_id=@tenant AND is_trial=false
 	RevokePersonalModels(tenant string) error
+	// SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND m.revoked=false AND m.is_trial=false ORDER BY p.is_active DESC,p.id
+	ListModelProfiles(tenant string) ([]model.ModelProfile, error)
+	// SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND p.id=@id AND m.revoked=false AND m.is_trial=false
+	FindModelProfile(tenant string, id uint32) ([]model.ModelProfile, error)
+	// SELECT p.id,p.label,p.is_active,m.version,m.base_url,m.model,m.key_tail FROM model_profiles p JOIN model_configs m ON m.tenant_id=p.tenant_id AND m.version=p.version WHERE p.tenant_id=@tenant AND p.is_active=true AND m.revoked=false AND m.is_trial=false LIMIT 1
+	FindActiveModelProfile(tenant string) ([]model.ModelProfile, error)
+	// INSERT INTO model_profiles(tenant_id,id,version,label) VALUES(@tenant,@id,@version,@label) AS incoming ON DUPLICATE KEY UPDATE version=incoming.version,label=incoming.label
+	SaveModelProfile(tenant string, id, version uint32, label string) error
+	// UPDATE model_profiles SET is_active=(id=@id) WHERE tenant_id=@tenant
+	SetActiveModelProfile(tenant string, id uint32) error
 }
 
 type outboxCommands interface {
