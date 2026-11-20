@@ -37,8 +37,9 @@ try {
 }
 
 $timestamp = $null
-if (![uri]::TryCreate($env:RESEARCHPILOT_SIGNING_TIMESTAMP_URL, [UriKind]::Absolute, [ref]$timestamp) -or $timestamp.Scheme -ne 'https') {
-    throw 'Set RESEARCHPILOT_SIGNING_TIMESTAMP_URL to the HTTPS RFC 3161 timestamp endpoint.'
+if (![uri]::TryCreate($env:RESEARCHPILOT_SIGNING_TIMESTAMP_URL, [UriKind]::Absolute, [ref]$timestamp) -or
+    $timestamp.Scheme -notin @('http', 'https') -or !$timestamp.Host -or $timestamp.UserInfo) {
+    throw 'Set RESEARCHPILOT_SIGNING_TIMESTAMP_URL to an HTTP or HTTPS RFC 3161 timestamp endpoint.'
 }
 
 $signtool = (Get-Command signtool.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source

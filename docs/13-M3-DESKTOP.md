@@ -42,7 +42,7 @@ Windows x64 验收包 `0.1.2` 将 `apps/desktop/assets/researchpilot-icon.png` �
 
 ## 正式签名与发布前验证
 
-本机已通过 MyGo 的签名流程验收。临时证书写入了安装器、应用和卸载器三处 Authenticode 签名，证书及私钥随后删除。正式构建需使用可访问私钥的可信代码签名证书，并由 HTTPS RFC 3161 端点加盖时间戳。[Microsoft SignTool 指南](https://learn.microsoft.com/windows/win32/seccrypto/signtool)。
+本机已通过 MyGo 的签名流程验收。临时证书写入了安装器、应用和卸载器三处 Authenticode 签名，证书及私钥随后删除。正式构建需使用可访问私钥的可信代码签名证书，并由 RFC 3161 服务加盖时间戳。[Microsoft SignTool 指南](https://learn.microsoft.com/windows/win32/seccrypto/signtool)。
 
 ### 申请发布者签名
 
@@ -50,7 +50,7 @@ Windows x64 验收包 `0.1.2` 将 `apps/desktop/assets/researchpilot-icon.png` �
 
 Microsoft Azure Artifact Signing 的个人公开信任验证限美国和加拿大。SignPath Foundation 的免费开源签名要求项目已经发布过所申请的产物形式。[Azure 资格说明](https://learn.microsoft.com/azure/artifact-signing/quickstart) · [SignPath 条件](https://signpath.org/terms)。
 
-签名服务商审核通过后，在 Windows 发布机安装令牌驱动或云签名客户端，并按供应商说明登录或插入令牌。当前用户可用的证书可用以下命令确认，证书指纹和供应商的 HTTPS RFC 3161 时间戳地址用于下方构建。证件、账号认证信息及私钥由发布者在签名服务中管理。
+签名服务商审核通过后，在 Windows 发布机安装令牌驱动或云签名客户端，并按供应商说明登录或插入令牌。当前用户可用的证书可用以下命令确认，证书指纹和供应商的 RFC 3161 时间戳地址用于下方构建。证件、账号认证信息及私钥由发布者在签名服务中管理。SSL.com 文档提供的地址为 `http://ts.ssl.com`，构建会验证时间戳签名。[SSL.com 时间戳说明](https://www.ssl.com/how-to/using-your-code-signing-certificate/)。
 
 ~~~powershell
 Get-ChildItem Cert:/CurrentUser/My -CodeSigningCert |
@@ -63,7 +63,7 @@ Get-ChildItem Cert:/CurrentUser/My -CodeSigningCert |
 ~~~powershell
 $ErrorActionPreference = 'Stop'
 $env:RESEARCHPILOT_SIGNING_THUMBPRINT = '<证书指纹>'
-$env:RESEARCHPILOT_SIGNING_TIMESTAMP_URL = '<HTTPS RFC 3161 地址>'
+$env:RESEARCHPILOT_SIGNING_TIMESTAMP_URL = '<RFC 3161 时间戳地址>'
 # 证书在本机存储时设为 LocalMachine，默认 CurrentUser。
 $env:RESEARCHPILOT_SIGNING_STORE = 'CurrentUser'
 
