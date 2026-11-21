@@ -62,3 +62,14 @@
 应用抓取两页 MySQL 8.4 原始文档时收到 HTTP 403，同版本 Oracle 官方文档可读取。抓取工具现在仅对匹配的 MySQL 8.4 英文手册页面尝试一次 Oracle 官方副本，并在报告中引用实际读取的页面。两道 MySQL 题均由 `no_evidence` 转为完整报告。复核了事务隔离题中的快照、锁定读语义，以及锁定读题中的行锁范围、`SKIP LOCKED` 和队列适用条件。[事务隔离级别](https://docs.oracle.com/cd/E17952_01/mysql-8.4-en/innodb-transaction-isolation-levels.html) · [锁定读](https://docs.oracle.com/cd/E17952_01/mysql-8.4-en/innodb-locking-reads.html)
 
 修复后的 Asynq 题仍为 `insufficient_evidence`。归档包含 README、目录、依赖清单和 Redis 持久化文档，缺少支撑 Asynq 重试与恢复行为的实现片段。SSRF 题由基线完整报告变为 `budget_exhausted`，本轮只计部分完成。两轮均独立计分，结果保存在本机忽略目录，八份完整报告已抽查关键断言与归档片段。真实无链接搜索仍需单独验收。
+
+### Asynq 与预算耗尽个案复核
+
+2026-11-21（Asia/Shanghai），使用同一模型和题面复测上一轮两道部分完成的题，两道均生成完整报告并通过引用完整性检查。此轮只复测两题，十题整组记录仍为上表。
+
+| 个案 | 上一轮 | 本次复测 |
+| --- | --- | --- |
+| asynq-retries | 证据不足 | 完整报告，19,708 Token。引用固定提交的 README、重试处理、租约恢复和入队配置源码。 |
+| ssrf | 预算耗尽 | 完整报告，9,946 Token。引用 OWASP 官方防护指南。 |
+
+对照归档源码复核了至少一次执行、重试与租约恢复的支撑关系。幂等要求是依据重复执行窗口作出的推论，Redis 写盘与复制的保证仍属于报告的局限。数据库集成测试另行验证了完整摘录的预留失败时，可在同一合成步骤使用较短摘录发布带引用的报告。

@@ -9,8 +9,10 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"researchpilot/internal/common/textutil"
+	evidencecontract "researchpilot/internal/evidence"
 	"researchpilot/internal/repository/model"
 	toolcontract "researchpilot/internal/tools"
 )
@@ -169,4 +171,46 @@ func githubPublicFallback(ctx context.Context, client *http.Client, input toolco
 		return []model.Source{{Title: input.Owner + "/" + input.Repo + " README at " + sha + " (public-page fallback; API metadata unavailable)", URL: base + "/blob/" + sha + "/" + url.PathEscape(name), Excerpt: textutil.Clip(string(readme), 16000)}}, nil
 	}
 	return nil, errors.New("github_readme_unavailable")
+}
+
+// githubFileURLs resolves only public, commit-pinned file links. Paths are
+// escaped segment by segment and the raw request uses a fixed GitHub host.
+func githubFileURLs(u *url.URL) (source, raw string) {
+	if u.Scheme != "https" || !strings.EqualFold(u.Host, "github.com") || u.User != nil || u.RawQuery != "" || u.ForceQuery {
+		return "", ""
+	}
+	parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 5)
+	if len(parts) != 5 || parts[2] != "blob" || !commitID.MatchString(parts[3]) ||
+		!toolcontract.ValidGitHubPath(parts[4]) || strings.Contains(strings.ToLower(u.EscapedPath()), "%2f") {
+		return "", ""
+	}
+	input := toolcontract.Input{Tool: "github_repo", Owner: parts[0], Repo: parts[1]}
+	if input.Validate() != nil {
+		return "", ""
+	}
+	repo := input.Owner + "/" + input.Repo
+	suffix := parts[3] + "/" + escapeGitHubPath(parts[4])
+	return "https://github.com/" + repo + "/blob/" + suffix, "https://raw.githubusercontent.com/" + repo + "/" + suffix
+}
+
+func fetchGitHubFile(ctx context.Context, client *http.Client, source, rawURL string) ([]model.Source, error) {
+	fixedClient := *client
+	fixedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	raw, err := requestTextLimit(ctx, &fixedClient, rawURL, nil, 256<<10)
+	if err != nil {
+		return nil, err
+	}
+	if !utf8.Valid(raw) || strings.ContainsRune(string(raw), 0) {
+		return nil, errors.New("github_file_not_text")
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return nil, errors.New("empty_page")
+	}
+	goal, _ := ctx.Value(evidenceGoalKey{}).(string)
+	return []model.Source{{
+		Title:   "Repository file " + source,
+		URL:     source,
+		Excerpt: evidencecontract.Select(text, goal, 18000),
+	}}, nil
 }

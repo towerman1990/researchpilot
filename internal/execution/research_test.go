@@ -60,6 +60,10 @@ func TestResearchIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true})
 }
 
+func TestCompactSynthesisIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, compactSynthesis: true})
+}
+
 func TestInsufficientEvidenceIntegration(t *testing.T) { researchFixture(t, researchFixtureOptions{}) }
 
 func TestCoverageJSONRepairIntegration(t *testing.T) {
@@ -75,7 +79,7 @@ func TestCitationReviewIntegration(t *testing.T) {
 }
 
 type researchFixtureOptions struct {
-	sufficient, malformed, reviewPlan, reviewCitations bool
+	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis bool
 }
 
 func researchFixture(t *testing.T, options researchFixtureOptions) {
@@ -122,6 +126,7 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 		body := "<html><body>Official fixture documents durable research execution.</body></html>"
 		if req.URL.Host == "api.deepseek.com" {
 			raw, _ := io.ReadAll(req.Body)
+			used := 100
 			content := `{"steps":[{"tool":"fetch_page","url":"https://example.com/docs"}]}`
 			if strings.Contains(string(raw), "You are the citation reviewer") {
 				content = `{"supported":[true,false]}`
@@ -129,6 +134,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				var request struct{ Messages []struct{ Content string } }
 				if err := json.Unmarshal(raw, &request); err != nil {
 					t.Fatal(err)
+				}
+				if options.compactSynthesis && len(request.Messages[1].Content) > 7500 {
+					t.Fatal("full synthesis prompt was sent despite the budget limit")
 				}
 				ids := regexp.MustCompile(`"source_id":"([a-f0-9]{32})"`).FindStringSubmatch(request.Messages[1].Content)
 				if len(ids) != 2 {
@@ -142,6 +150,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				content = string(encoded)
 			}
 			if strings.Contains(string(raw), "Assess evidence coverage") {
+				if options.compactSynthesis {
+					used = 25000
+				}
 				coverage, _ := json.Marshal(map[string]any{"sufficient": sufficient, "gaps": []string{"Missing direct support"}})
 				content = string(coverage)
 				if malformed {
@@ -151,10 +162,13 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 			if strings.Contains(string(raw), "Repair coverage JSON") {
 				content = `{"sufficient":true,"gaps":["A quoted note"]}`
 			}
-			encoded, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": content}, "finish_reason": "stop"}}, "usage": map[string]int{"total_tokens": 100, "prompt_tokens": 70, "completion_tokens": 30}})
+			encoded, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": content}, "finish_reason": "stop"}}, "usage": map[string]int{"total_tokens": used, "prompt_tokens": used - 30, "completion_tokens": 30}})
 			body = string(encoded)
 		} else {
 			fetchedURL = req.URL.String()
+			if options.compactSynthesis {
+				body = "<main>" + strings.Repeat("Official fixture documents durable research execution. ", 240) + "</main>"
+			}
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
 	})
@@ -207,6 +221,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	}
 	expectedStatus := "SUCCEEDED"
 	expectedUsage := 300
+	if options.compactSynthesis {
+		expectedUsage = 25200
+	}
 	if malformed {
 		expectedUsage += 100
 	}
@@ -417,5 +434,20 @@ func TestResearchPreferencesIntegration(t *testing.T) {
 	if !strings.Contains(sourcePreference(original), "current research goal take precedence") ||
 		!strings.Contains(reportPreferences(original), "value bullets") {
 		t.Fatal("worker prompts omit saved preferences or task precedence")
+	}
+}
+
+func TestRepositorySourceTakesPriorityOverDirectoryListing(t *testing.T) {
+	sources := []evidence{
+		{ID: "dir", Title: "Repository directory / at a commit", URL: "https://github.com/example/project/tree/commit", Excerpt: "Files shown:\nrecoverer.go\n"},
+		{ID: "manifest", Title: "Dependency manifest go.mod at a commit", URL: "https://github.com/example/project/blob/commit/go.mod", Excerpt: "module example/project"},
+		{ID: "source", Title: "Repository file recoverer.go", URL: "https://github.com/example/project/blob/commit/recoverer.go", Excerpt: "Recover expired leases and retry."},
+	}
+	if got := previousRepositoryListings(sources); !strings.Contains(got, "recoverer.go") ||
+		!strings.Contains(got, sources[0].URL) || strings.Contains(got, "Recover expired") {
+		t.Fatalf("unexpected replan context: %s", got)
+	}
+	if got := promptEvidence(sources, "Explain task recovery", 16000, 1); len(got) != 1 || got[0].ID != "source" {
+		t.Fatalf("selected evidence: %+v", got)
 	}
 }

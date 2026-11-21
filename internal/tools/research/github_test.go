@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -131,6 +132,43 @@ func TestGitHubRejectsUnsafeDirectory(t *testing.T) {
 	for _, directory := range []string{"a/../b", "/etc", "a//b", "a\\b", "a/%2e%2e", "a\nb"} {
 		if (toolcontract.Input{Tool: "github_repo", Owner: "example", Repo: "project", Path: directory}).Validate() == nil {
 			t.Fatalf("invalid scoped directory accepted: %q", directory)
+		}
+	}
+}
+
+func TestFetchGitHubFileUsesPinnedRawText(t *testing.T) {
+	t.Setenv("GITHUB_READ_TOKEN", "test-token")
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const source = "https://github.com/example/project/blob/" + sha + "/internal/retry%20loop.go"
+	const content = "package retry\n\nfunc canRetry(used, limit int) bool { return used < limit }"
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		want := "https://raw.githubusercontent.com/example/project/" + sha + "/internal/retry%20loop.go"
+		if req.URL.String() != want || req.Header.Get("Authorization") != "" {
+			t.Fatalf("unexpected upstream request to %s", req.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(content))}, nil
+	})}
+	sources, err := fetchPage(t.Context(), client, toolcontract.Input{URL: source + "#L2"})
+	if err != nil || len(sources) != 1 || sources[0].URL != source || sources[0].Excerpt != content {
+		t.Fatalf("sources=%+v err=%v", sources, err)
+	}
+}
+
+func TestGitHubFileURLsRejectAmbiguousLinks(t *testing.T) {
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, target := range []string{
+		"https://github.com/example/project/blob/main/retry.go",
+		"https://github.com.example.net/example/project/blob/" + sha + "/retry.go",
+		"https://github.com/example/project/blob/" + sha + "/dir%2fretry.go",
+		"https://github.com/example/project/blob/" + sha + "/dir/%2e%2e/retry.go",
+		"https://github.com/example/project/blob/" + sha + "/retry.go?x=y",
+	} {
+		u, err := url.Parse(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if source, raw := githubFileURLs(u); source != "" || raw != "" {
+			t.Fatalf("rewrote ambiguous URL %s", target)
 		}
 	}
 }

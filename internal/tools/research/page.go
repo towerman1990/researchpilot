@@ -26,6 +26,9 @@ func fetchPage(ctx context.Context, client *http.Client, input toolcontract.Inpu
 	location := input.URL
 	u, parseErr := url.Parse(input.URL)
 	if parseErr == nil && strings.EqualFold(u.Hostname(), "github.com") {
+		if source, raw := githubFileURLs(u); raw != "" {
+			return fetchGitHubFile(ctx, client, source, raw)
+		}
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 		if len(parts) == 4 && parts[2] == "wiki" && repoPart.MatchString(parts[0]) && repoPart.MatchString(parts[1]) && regexp.MustCompile("^[A-Za-z0-9_.()-]{1,128}$").MatchString(parts[3]) {
 			location = "https://raw.githubusercontent.com/wiki/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/" + url.PathEscape(parts[3]) + ".md"

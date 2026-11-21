@@ -33,6 +33,8 @@ Plan 输出有版本的结构化步骤，包括目标、工具候选、预期证
 
 统一契约 Tool 接受服务端作用域、带时限的 Context 和已校验的 JSON。结果含 evidence、retrieved_at、truncated、error_code。保存最小证据片段，超限、429 与不可用结果转为结构化观察。GitHub API 处理额度和 Retry-After，工具缓存按授权边界与 commit 键控。GitHub 分析按固定提交查看嵌套目录和依赖清单，可指定仓库内目录。每次最多读取六份清单，跨目录概览和清单读取均受大小限制。Git 树超限时仅列出当前目录，并标注覆盖范围。[GitHub Contents API](https://docs.github.com/en/rest/repos/contents)
 
+对 GitHub 实现行为的研究可以先用 `github_repo` 找到固定提交与文件路径，再用 `fetch_page` 读取固定提交的 `blob` 链接。工具读取有大小限制的公开文本，并以固定提交链接归档源码摘录。重规划收到有界的目录线索，报告优先采用能直接支撑行为结论的源码。若报告合成的预算预留失败，会在同一步使用较短摘录再尝试，沿用原任务预算和引用校验。
+
 ## 模型供应商抽象
 
 Runtime 使用 Chat(ctx, req) 和 ChatStream(ctx, req)；请求含 messages、tool schema、最大输出和可选结构化输出，统一响应含文本、工具调用、usage 与 finish_reason。OpenAI-compatible 适配器以 Chat Completions 为首个协议，取配置快照和密钥版本。设置保存时用同租户探测所需能力，区分基础对话、工具调用、结构化输出和流式工具片段。有能力差异时在配置页面明确标记；允许受限 JSON 模式适配，始终执行服务端 schema 校验。供应商错误归一为认证、限流、超时、不兼容或上游失败。只在安全的边界限次重试；记录供应商请求 ID，禁止静默跨供应商发送数据。[OpenAI Chat API](https://developers.openai.com/api/reference/resources/chat)
