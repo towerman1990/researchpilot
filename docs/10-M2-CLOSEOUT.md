@@ -67,6 +67,8 @@ sudo docker compose run --rm --no-deps   -e EVAL_ALLOW_LIVE=1 api evaluate > .ca
 
 使用独立验收项目时，需同时传入该项目实际使用的 -p 和 -f 参数。evaluate 通过数据库 Outbox 创建十个有界任务，交由真实 Redis / Worker 执行；不会直连执行器绕过派发。输出包含模型版本、时间、状态、Token、报告与引用证据。总等待时间默认 8 分钟，可通过 `EVAL_TIMEOUT` 设置，例如 `10m`。超时或中断时输出已收集的部分结果与 `unfinished_task_ids`，并返回非零退出码。已提交的任务继续由 Worker 处理。自动成功数不能代替人工质量分数，quality_accepted 默认始终为 false。
 
+如果要单独评估用户不提供 URL 的场景，在上述命令的 Compose `run` 参数中增加 `-e EVAL_SOURCE_MODE=unseeded`。模式会去掉题面预填 URL，保留数据库产品和版本等题目范围，输出的 `source_mode` 用于区分结果。默认 `seeded` 沿用原题。评估模式只改变输入题面，搜索是否可用由 Worker 的实际配置决定。
+
 人工放行要求至少 8 / 10 份可用报告，逐项核对关键断言、来源支撑、引用合法性和局限说明，并保存审查记录。PARTIAL 摘录不计为完整可用报告。
 
 ## 密钥轮换

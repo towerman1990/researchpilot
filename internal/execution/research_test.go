@@ -60,6 +60,11 @@ func TestResearchIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true})
 }
 
+func TestUnseededSearchResearchIntegration(t *testing.T) {
+	t.Setenv("BRAVE_SEARCH_API_KEY", "fixture-search-key")
+	researchFixture(t, researchFixtureOptions{sufficient: true, webSearch: true})
+}
+
 func TestCompactSynthesisIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, compactSynthesis: true})
 }
@@ -79,7 +84,7 @@ func TestCitationReviewIntegration(t *testing.T) {
 }
 
 type researchFixtureOptions struct {
-	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis bool
+	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch bool
 }
 
 func researchFixture(t *testing.T, options researchFixtureOptions) {
@@ -128,6 +133,12 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 			raw, _ := io.ReadAll(req.Body)
 			used := 100
 			content := `{"steps":[{"tool":"fetch_page","url":"https://example.com/docs"}]}`
+			if options.webSearch {
+				if strings.Contains(string(raw), "Create a technical research plan") && strings.Contains(string(raw), "https://docs.example.org/research-run") {
+					t.Fatal("planning fixture unexpectedly has a source URL")
+				}
+				content = `{"steps":[{"tool":"web_search","query":"durable research execution reference"}]}`
+			}
 			if strings.Contains(string(raw), "You are the citation reviewer") {
 				content = `{"supported":[true,false]}`
 			} else if strings.Contains(string(raw), "findings") {
@@ -164,7 +175,18 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 			}
 			encoded, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": content}, "finish_reason": "stop"}}, "usage": map[string]int{"total_tokens": used, "prompt_tokens": used - 30, "completion_tokens": 30}})
 			body = string(encoded)
+		} else if req.URL.Host == "api.search.brave.com" {
+			if !options.webSearch || req.URL.Path != "/res/v1/web/search" || req.URL.Query().Get("q") != "durable research execution reference" || req.Header.Get("X-Subscription-Token") != "fixture-search-key" {
+				t.Fatalf("unexpected search request to %s", req.URL)
+			}
+			body = `{"web":{"results":[{"title":"Unreadable document","url":"https://example.com/unavailable","description":"Unverified search snippet."},{"title":"Official fixture","url":"https://docs.example.org/research-run","description":"Snippet is not report evidence."}]}}`
 		} else {
+			if req.Header.Get("X-Subscription-Token") != "" {
+				t.Fatal("search credential forwarded to a source")
+			}
+			if options.webSearch && req.URL.Path == "/unavailable" {
+				return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("not found")), Request: req}, nil
+			}
 			fetchedURL = req.URL.String()
 			if options.compactSynthesis {
 				body = "<main>" + strings.Repeat("Official fixture documents durable research execution. ", 240) + "</main>"
@@ -249,6 +271,14 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	var used, reserved int
 	if err = db.QueryRow("SELECT tokens_used,tokens_reserved FROM research_tasks WHERE id=?", d.Task).Scan(&used, &reserved); err != nil || used != expectedUsage || reserved != 0 {
 		t.Fatalf("accounting=%d %d %v", used, reserved, err)
+	}
+	if options.webSearch {
+		sources, err := worker.store.EvaluationSources(t.Context(), d.Tenant, d.Task)
+		if err != nil || len(sources) != 1 || fetchedURL != "https://docs.example.org/research-run" ||
+			sources[0].URL != fetchedURL || !strings.Contains(sources[0].Excerpt, "Official fixture documents durable research execution.") ||
+			strings.Contains(sources[0].Excerpt, "Snippet is not report evidence.") {
+			t.Fatalf("expected only the cited original page, got %+v (%v)", sources, err)
+		}
 	}
 	if options.reviewCitations {
 		tasks := taskservice.Tasks{Store: worker.store}

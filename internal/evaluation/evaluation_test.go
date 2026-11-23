@@ -79,3 +79,28 @@ func TestEvaluateTimeoutReturnsFinishedAndUnfinishedCases(t *testing.T) {
 		t.Fatalf("unexpected partial report: %+v", result)
 	}
 }
+
+func TestUnseededCasesKeepQuestionsWithoutSuppliedURLs(t *testing.T) {
+	cases, err := casesForSourceMode("unseeded")
+	if err != nil || len(cases) != len(evaluationCases) {
+		t.Fatalf("cases=%d err=%v", len(cases), err)
+	}
+	for i, c := range cases {
+		original := evaluationCases[i]
+		question := c.Goal
+		if c.ID == "mysql-locking" {
+			var ok bool
+			question, ok = strings.CutPrefix(question, "在 MySQL 8.4 InnoDB 中，")
+			if !ok {
+				t.Fatal("removing the URL lost the database scope")
+			}
+		}
+		if c.ID != original.ID || c.Goal == "" || strings.Contains(c.Goal, "://") ||
+			!strings.HasSuffix(original.Goal, question) || !strings.Contains(original.Goal, "https://") {
+			t.Fatalf("unexpected unseeded case: %+v", c)
+		}
+	}
+	if _, err := casesForSourceMode("unexpected"); err == nil {
+		t.Fatal("invalid source mode was accepted")
+	}
+}

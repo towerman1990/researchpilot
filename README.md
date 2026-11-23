@@ -1,121 +1,75 @@
 # ResearchPilot
 
-ResearchPilot 是一个本地技术研究工作台。你可以注册、登录、提交研究目标、查看任务历史，并通过 SSE 实时跟踪进度。M1 演示路径可用。M2 已实现模型驱动的研究、证据引用、任务取消和恢复重试，完整验收仍在进行。
+ResearchPilot 是一个开源技术研究工作台，用于查阅官方文档、理解开源实现和比较技术方案。输入研究问题后，工作台在后台整理计划、采集并归档证据，生成可逐条核对引用的报告。
 
-## 启动
+[打开线上工作台](https://researchpilot.towerman1990.cn) · [下载 Windows x64 安装包](https://github.com/towerman1990/researchpilot/releases/tag/v0.1.2) · [技术文档](docs/README.md)
 
-Windows 用户需要 PowerShell 7、Docker 和 Compose。在仓库根目录运行以下命令。升级已有数据库前先备份 MySQL。macOS 和 Linux 用户请参阅 [macOS / Linux 部署指南](docs/14-MACOS-LINUX.md)，无需安装 PowerShell 即可启动。
+## 开始研究
+
+1. 注册或登录线上工作台，输入一个具体的技术问题。可以附上公开网页、GitHub 链接或研究资料。
+2. 提交后即可查看实时进度。需要控制取证范围时，可以先审阅和修改计划，再确认开始。
+3. 报告生成后，打开「核查证据」阅读支持关键结论的摘录，也可以下载 Markdown、通过打印窗口另存为 PDF，或基于报告继续追问。
+
+线上平台模型为每个账号提供**累计 10 次免费试用**，额度不按天重置。任务创建成功时扣减一次，同一任务的重试或恢复不会重复扣减，失败或取消不返还。用完后，可在「模型设置」配置自己的 OpenAI 兼容接口，包括 Base URL、模型名称和 API Key。使用个人模型不消耗试用次数。可以保存多套配置，切换后对新任务生效。
+
+Windows x64 客户端采用 MyGo 和 WebView2，默认连接线上工作台，与网页版共享账号、任务和报告。GitHub 上的 `v0.1.2` 是未签名预发行版，发布页提供安装包和 SHA-256 校验文件。[Windows 安装与升级说明](docs/13-M3-DESKTOP.md)
+
+## 主要功能
+
+| 功能 | 使用方式 |
+| --- | --- |
+| 证据采集 | 读取公网页面、公开 GitHub 仓库及固定提交的源码，支持定向分析仓库目录和依赖清单。提交时还可上传最多两份 UTF-8 的 TXT 或 Markdown，每份不超过 24 KiB。 |
+| 报告与反馈 | 查看归档摘录、导出报告、提交反馈，或基于现有报告新建追问任务。启用「发布前复核引用」后，模型会检查结论与摘录是否相符。 |
+| 任务管理 | 在多任务工作区集中查看运行中、待审批和已结束的任务。研究中可以查看实时进度、取消任务，或重新打开历史任务。 |
+| 定时研究 | 使用个人模型创建单次、每天或每周运行的计划，可在站内订阅结果。每天和每周按固定 24 小时和 168 小时间隔触发。 |
+| 研究偏好与评估 | 保存来源、详略和报告结构偏好，查看近 7 天或 30 天的研究结果、反馈和模型用量，并按个人模型价格估算费用。 |
+
+研究材料不足时，工作台可发布带证据摘录和局限说明的「部分完成」报告。配置模型后，与任务相关的上传资料摘录会发送给该任务使用的模型服务。
+
+### 搜索与文档工具
+
+未配置网页搜索时，模型可以规划公开来源，显式提供 URL 有助于限定资料范围。自托管时可通过 `BRAVE_SEARCH_API_KEY` 启用 Brave 搜索。搜索结果用于定位资料，报告引用以实际读取并归档的原文为依据。
+
+自托管时设置 `MICROSOFT_LEARN_MCP_ENABLED=true`，可启用 Microsoft Learn 的四个预设主题，覆盖 ASP.NET Core Minimal API 路由、.NET HttpClient、Azure App Service 自定义容器和 WSL 容器。真实 Brave 调用仍待项目验收。
+
+## Docker Compose 本地运行
+
+从仓库根目录执行。Windows 需要 PowerShell 7 和可用的 Docker Compose。
 
 ```powershell
 pwsh -File ./scripts/init-local.ps1
 docker compose up --build -d
-docker compose ps
+docker compose ps -a
 ```
 
-初始化脚本在缺少密钥时生成 `.cache/model-master.key`。请保留此文件，以便解密已保存的模型配置。首次创建 MySQL 卷时，镜像执行 `migrations/001_m1.sql`。Compose 的 `migrate` 服务应用增量迁移，成功后启动 API 和 Worker。
+macOS 和 Linux 可使用 Shell 初始化。
 
-启动后，用浏览器访问 [http://localhost:8080](http://localhost:8080)。API 仅映射到本机回环地址，Compose 中的数据库凭据用于本地开发。
-
-## 运行研究任务
-
-登录后，在工作台的「模型设置」中填写供应商 Base URL、模型名称和 API Key。可以保存多套命名配置，并将任意一套设为当前。切换后，新任务使用选中的配置版本。未配置个人模型时，启用试用的环境使用平台模型，否则运行演示任务。
-
-真实研究可读取公网页面和公开 GitHub 仓库信息。启用 Brave 搜索需要在本地 Compose 环境中设置 `BRAVE_SEARCH_API_KEY`。未启用搜索时，可以在研究目标中提供公开网页 URL 或公开 GitHub 仓库链接。
-
-例如，可以提交「分析 `owner/repo` 中 `apps/desktop` 的目录结构及其声明依赖」。报告可引用固定提交下的目录和依赖清单。大型仓库可以指定子目录，以便缩小分析范围。
-
-在部署的 Compose 环境设置 `MICROSOFT_LEARN_MCP_ENABLED=true` 后，可在目标中指定使用 Microsoft Learn 查询 ASP.NET Core Minimal API 路由、.NET HttpClient、Azure App Service 自定义容器或 WSL 容器。连接器按预设主题发送固定检索词，报告引用链接到 Microsoft Learn 原文。
-
-打开已生成的报告，点击「导出 PDF」，在打印窗口选择「另存为 PDF」或 Windows 的「Microsoft Print to PDF」。也可点击「下载 Markdown」获取原文。
-
-点击报告上的「核查证据」，可查看归档来源和报告引用的数量，按报告中的引用顺序逐条打开原始摘录。
-
-新建研究时可勾选「发布前复核引用」。报告写成后，独立的模型调用会检查各项结论与所引摘录。证据不足的结论会被移除，任务标为部分完成。复核使用该任务的模型和 Token 预算。
-
-展开报告下方的「报告反馈」，可标记报告是否有帮助并保存最多 500 字的备注。再次保存会更新同一报告的反馈。
-
-打开已有报告，在「基于这份报告追问」输入问题并提交。追问会创建一项独立研究任务，可从任务详情查看上一份报告。真实研究会参考上一份报告，并为新结论重新采集证据。
-
-新建研究时可勾选「先生成计划，由我确认后开始查资料」。模型生成初始计划后，任务会暂停。打开任务详情，可修改各步骤的问题和资料来源，再确认开始研究。启用计划审批需要个人模型或可用的试用额度。
-
-创建研究时可补充最多两份 UTF-8 的 TXT 或 Markdown 文件，每份最多 24 KiB。资料随任务保存，可作为报告引用。配置模型后，相关资料摘录会发送给该任务使用的模型服务。
-
-在左侧「研究偏好」设置常用来源、详略和报告结构。保存后适用于同一账号之后创建的研究和追问，单次任务中的明确要求优先。新任务保留创建时的设置，可以在偏好页清除账号默认值。
-
-在左侧「研究用量」查看本账号最近 7 天或 30 天的已结算模型调用，按 UTC 日期汇总。面板分别显示供应商报告的 Token 和系统估算值。供应商账单提供实际费用。
-
-在「个人模型成本估算」选择模型，填写每百万输入和输出 Token 的价格。估算来自供应商明确返回的分项用量，历史未分项用量和预算估算量单独显示。
-
-在侧栏「研究评估」查看本账号最近 7 天或 30 天的任务结果、含归档引用的报告数和用户反馈。可从复查列表打开部分完成、失败或被标记为「帮助不大」的任务。
-
-打开侧栏「多任务工作区」，并排查看进行中、等待计划确认和最近结束的研究。页面可见时每 5 秒自动更新。点击任务可进入原有详情页，审阅计划、跟踪实时进度或阅读报告。
-
-打开侧栏「定时研究」，选择按本地时间输入的首次运行时间和单次、每天或每周频率。定时任务使用触发时的个人模型配置。每天和每周分别按固定 24 和 168 小时间隔重复，跨夏令时后当地时间可能变化。可以取消未结束的计划，并打开最近一次生成的研究任务。
-
-勾选「订阅站内运行结果」后，计划触发的任务结束时会显示在「订阅结果」。未读结果优先，可打开任务并标为已读。修改订阅影响之后触发的任务，已经订阅的运行会保留在结果列表中。
-
-## 演示烟测
-
-服务启动后，可运行以下命令验证 M1 演示闭环。脚本会创建两个测试账号和一个任务，检查幂等请求、租户隔离、SSE 回放及演示报告。
-
-```powershell
-pwsh -File ./scripts/smoke.ps1
+```sh
+sh scripts/init-local.sh
+docker compose up --build -d
+docker compose ps -a
 ```
 
-## 主链路
+`migrate` 服务退出码为 0 后，API 和 Worker 会启动。打开 [本地工作台](http://localhost:8080)，在「模型设置」配置个人模型即可运行真实研究。默认本地配置在没有个人模型或平台试用时运行演示任务。
 
-1. API 事务写入任务、幂等键、初始事件和 Outbox。
-2. Worker 进程中的转发循环认领 Outbox，通过 Asynq 向 Redis 入队。
-3. Worker 校验派发代次并取得租约。研究任务由模型规划步骤，通过只读工具收集并保存证据，生成经引用校验的报告。演示任务使用固定工具和模型适配器。
-4. Worker 保存执行检查点与事件，并原子提交最终报告和任务终态。API 从 MySQL 回放 SSE 事件，支持用 `Last-Event-ID` 续传。
-5. Worker 处理任务取消，回收循环处理过期租约、已派发但长时间未领取的任务，以及达到截止时间的任务。恢复执行可复用已提交的检查点。
+升级前备份数据库，并保留初始化生成的 `.cache/model-master.key`，恢复加密的模型配置时需要原密钥。[macOS / Linux 部署指南](docs/14-MACOS-LINUX.md) · [生产部署与恢复指南](docs/12-M3-RELEASE.md)
 
-## 按 Log ID 查询日志
+## 架构与排查
 
-API 响应头 `X-Log-ID` 提供服务端生成的请求编号。新建任务的详情页可复制「创建请求 Log ID」。用这个编号查询创建请求、Worker 启动和执行步骤的日志，包括重试后的步骤。
+后端使用 Go 和 Hertz，前端使用 React、Vite 和 Ant Design。API 将任务和待派发记录写入同一个 MySQL 事务，Worker 通过 Redis 和 Asynq 领取任务，使用 Eino 编排「计划 → 取证 → 覆盖检查 → 必要时重规划 → 合成报告」。租约和检查点支持中途恢复。浏览器通过 SSE 接收进度，断线后可按 `Last-Event-ID` 续传。
+
+程序入口位于 `cmd/researchpilot`。`internal/wiring` 负责依赖装配，`internal/handler` 提供 HTTP 接口，`internal/task` 和 `internal/execution` 分别负责任务管理和研究执行，`internal/repository` 管理 GORM Gen 查询和事务。
+
+新任务详情可复制「创建请求 Log ID」。生产日志保留同一个任务创建编号，便于关联 API、Worker 和执行步骤。
 
 ```powershell
 docker compose logs api worker | Select-String -SimpleMatch '<Log ID>'
 ```
 
-对同一个任务重复提交时，每次 HTTP 请求有自己的编号，原创建编号会随任务保留。已有任务可以继续按 `task_id` 查询。
+## 开发与验证
 
-## 项目现状
+源码构建需要 Go 1.25+、Node.js 22.12+ 和 npm。可运行 `go test ./...`、`go vet ./...` 及 `npm --prefix web ci`、`npm --prefix web run build`。本地启动后可使用 `pwsh -File ./scripts/smoke.ps1` 检查演示闭环。
 
-- 程序入口在 `cmd/researchpilot`，依赖由 `internal/wiring` 装配，`internal/app` 管理进程启动和关闭。
-- `internal/handler` 提供 Hertz API，`internal/task` 管理任务，`internal/execution` 运行研究流程并通过 Eino 编排各阶段。任务执行的 MySQL 查询与事务由 `internal/repository` 管理，网页抓取、搜索和 GitHub 工具实现在 `internal/tools/research`。API 与 Worker 分进程运行。
-- M1 迁移使用 32 字符的随机十六进制 ID，每个用户独占一个个人租户。身份使用 bcrypt 与 8 小时的 HttpOnly 会话 Cookie。Web 与 API 同源。
-- 真实模型十题评估、完整流式能力探测、限流、事件过期恢复与清理、桌面客户端仍待完成。当前配置面向本地开发。
+GitHub CI 包含 Go/MySQL、前端、开发 Compose 和生产 Compose 四组检查。独立的镜像发布工作流要求对应提交的 CI 成功，再将 `linux/amd64` 镜像发布至 GHCR。[CI 工作流](.github/workflows/ci.yml) · [镜像发布工作流](.github/workflows/release-image.yml)
 
-## 本地构建
-
-需要 Go 1.25+、Node.js 22.12+ 和 npm。Go 与前端依赖均已锁定。
-
-```powershell
-go test ./...
-go vet ./...
-npm --prefix web ci
-npm --prefix web run build
-```
-
-也可分别运行 `go run ./cmd/researchpilot api` 和 `go run ./cmd/researchpilot worker`。先在 MySQL 应用迁移并设置 `MYSQL_DSN`，Worker 的 `REDIS_ADDR` 默认为 `127.0.0.1:6379`。API 的 `PUBLIC_ORIGIN` 默认为 `http://localhost:8080`，须和浏览器访问地址一致。
-
-## 文档与协作
-
-- [技术文档索引](docs/README.md)
-- [M2 设计](docs/08-M2-DESIGN.md)与 [M2 实施和验证记录](docs/09-M2-IMPLEMENTATION.md)
-- [Codex 跨设备协作指南](AGENTS.md)
-
-## 持续集成
-
-[CI 工作流](.github/workflows/ci.yml) 在推送 main、提交 PR 和手动触发时运行：
-
-- Go 格式检查、模块校验、vet、竞态检测，以及 MySQL 8.4 迁移和持久执行集成测试。
-- Node.js 22 下安装锁定依赖、前端事件测试和生产构建。
-- 构建 Docker 镜像并启动完整 Compose 栈，运行 M1 烟测，验证任务流转、租户隔离、幂等和 SSE；失败时输出容器诊断。
-
-CI 使用临时数据库和随机生成的模型加密主密钥，不需要仓库 Secrets，也不访问真实模型供应商。真实模型质量评估仍需独立人工验收。CI 不发布镜像、不部署服务器。工作流推送至 GitHub 后才会开始云端运行；如需禁止合并失败的 PR，请在 GitHub 分支规则中将三个 CI 检查设为必需检查。
-
-M2 新增配置探测、撤销、主密钥轮换、PARTIAL 报告、事件过期恢复和 Redis 限流。迁移、验收和十题真实评估操作见 [M2 收尾与放行记录](docs/10-M2-CLOSEOUT.md)。
-
-M2 最终固定十题完成 8/10，并进行了助手关键证据复核；结果、失败案例及用户终验边界见 [真实评估记录](docs/11-M2-EVALUATION.md)。
+最新一轮隔离环境评估使用 DeepSeek，十道固定技术题均未提供 URL。在未启用 Brave 的情况下，10 道题生成完整报告，全部通过归档引用完整性检查。该结果仅代表本轮固定题集的自动结果。[评估记录与复现方法](docs/11-M2-EVALUATION.md)

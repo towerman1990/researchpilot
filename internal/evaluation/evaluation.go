@@ -88,7 +88,14 @@ func (e *Evaluator) run(ctx context.Context, output io.Writer) error {
 	if err != nil {
 		return errors.New("evaluation model unavailable")
 	}
-	cases := evaluationCases
+	sourceMode := os.Getenv("EVAL_SOURCE_MODE")
+	if sourceMode == "" {
+		sourceMode = "seeded"
+	}
+	cases, err := casesForSourceMode(sourceMode)
+	if err != nil {
+		return err
+	}
 	if raw := os.Getenv("EVAL_CASE_LIMIT"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil || limit < 1 || limit > len(cases) {
@@ -159,7 +166,7 @@ func (e *Evaluator) run(ctx context.Context, output io.Writer) error {
 			succeeded++
 		}
 	}
-	report := map[string]any{"schema_version": 1, "status": status, "unfinished_task_ids": unfinished, "evaluated_at": time.Now().UTC(), "model": config.Model, "model_version": version, "cases": results, "automated_successes": succeeded, "required_human_accepted": 8, "quality_accepted": false, "smoke_only": len(cases) < len(evaluationCases), "note": "Automated success does not establish semantic evidence support. Review every report before setting acceptance."}
+	report := map[string]any{"schema_version": 1, "source_mode": sourceMode, "status": status, "unfinished_task_ids": unfinished, "evaluated_at": time.Now().UTC(), "model": config.Model, "model_version": version, "cases": results, "automated_successes": succeeded, "required_human_accepted": 8, "quality_accepted": false, "smoke_only": len(cases) < len(evaluationCases), "note": "Automated success does not establish semantic evidence support. Review every report before setting acceptance."}
 	encoder := json.NewEncoder(output)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
@@ -172,6 +179,30 @@ func (e *Evaluator) run(ctx context.Context, output io.Writer) error {
 		return fmt.Errorf("only %d of %d reports completed; this run requires %d; inspect evaluation output", succeeded, len(cases), min(8, len(cases)))
 	}
 	return nil
+}
+
+func casesForSourceMode(mode string) ([]evaluationCase, error) {
+	switch mode {
+	case "seeded":
+		return evaluationCases, nil
+	case "unseeded":
+		cases := make([]evaluationCase, len(evaluationCases))
+		for i, item := range evaluationCases {
+			rest, hasPrefix := strings.CutPrefix(item.Goal, "根据 https://")
+			_, question, hasQuestion := strings.Cut(rest, " ")
+			if !hasPrefix || !hasQuestion || question == "" || strings.Contains(question, "://") {
+				return nil, fmt.Errorf("cannot remove the source URL from case %s", item.ID)
+			}
+			// This case gets its database and version from the supplied manual URL.
+			if item.ID == "mysql-locking" {
+				question = "在 MySQL 8.4 InnoDB 中，" + question
+			}
+			cases[i] = evaluationCase{ID: item.ID, Goal: question}
+		}
+		return cases, nil
+	default:
+		return nil, errors.New("EVAL_SOURCE_MODE must be seeded or unseeded")
+	}
 }
 
 func waitForResults(ctx context.Context, store Store, tenant string, results []evaluationResult) error {
