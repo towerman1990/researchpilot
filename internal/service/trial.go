@@ -12,6 +12,9 @@ import (
 )
 
 const TrialLimit = 10
+const GuestTrialLimit = 3
+
+var ErrGuestTrialExhausted = errors.New("guest_trial_exhausted")
 
 func TrialEnabled() bool { return os.Getenv("TRIAL_MODEL_ENABLED") == "true" }
 
@@ -26,6 +29,14 @@ func CreateTrial(tx repository.WriteTx, tenant, id string) (uint32, error) {
 	if used >= TrialLimit {
 		return 0, ErrTrialExhausted
 	}
+	version, err := CreateTrialCredential(tx, tenant)
+	if err != nil {
+		return 0, err
+	}
+	return version, tx.RecordTrial(tenant, id)
+}
+
+func CreateTrialCredential(tx repository.WriteTx, tenant string) (uint32, error) {
 	raw, err := os.ReadFile(os.Getenv("TRIAL_MODEL_API_KEY_FILE"))
 	if err != nil {
 		return 0, ErrTrialUnavailable
@@ -51,5 +62,5 @@ func CreateTrial(tx repository.WriteTx, tenant, id string) (uint32, error) {
 	if err := saveCredential(tx, aead, tenant, model.Credential{Version: version, BaseURL: base, Model: name, KeyVersion: keyVersion}, key, true); err != nil {
 		return 0, err
 	}
-	return version, tx.RecordTrial(tenant, id)
+	return version, nil
 }

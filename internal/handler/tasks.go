@@ -24,7 +24,7 @@ type Tasks struct {
 }
 
 func (h Tasks) RegisterRoutes(r route.IRouter) {
-	g := r.Group("/api/v1/research/tasks", h.Auth.apiHeaders, h.Auth.requireSession)
+	g := r.Group("/api/v1/research/tasks", h.Auth.apiHeaders, h.Auth.requireTaskSession)
 	g.GET("", h.list)
 	r.GET("/api/v1/research/preferences", h.Auth.apiHeaders, h.Auth.requireSession, h.getPreferences)
 	r.GET("/api/v1/research/usage", h.Auth.apiHeaders, h.Auth.requireSession, h.getUsage)
@@ -44,7 +44,7 @@ func (h Tasks) RegisterRoutes(r route.IRouter) {
 	g.GET("/:id/report/feedback", h.reportFeedback)
 	g.GET("/:id/events", h.events)
 	g.GET("/:id/sources/:source", h.source)
-	writes := r.Group("/api/v1/research/tasks", h.Auth.requireJSON, h.Auth.requireSession)
+	writes := r.Group("/api/v1/research/tasks", h.Auth.requireJSON, h.Auth.requireTaskSession)
 	writes.POST("", h.submit)
 	writes.POST("/:id/cancel", h.cancel)
 	writes.POST("/:id/plan/approve", h.approvePlan)
@@ -186,6 +186,9 @@ func (h Tasks) submit(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	options := taskservice.SubmitOptions{ReviewPlan: input.ReviewPlan, ReviewCitations: input.ReviewCitations}
+	if c.GetBool(guestKey) {
+		options.GuestAddress = clientAddress(ctx, c)
+	}
 	task, err := h.Actions.Submit(ctx, tenant, string(c.GetHeader("Idempotency-Key")), input.Goal, input.ParentTaskID, options, input.Attachments...)
 	if err != nil {
 		writeFailure(c, err)

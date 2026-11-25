@@ -43,6 +43,7 @@ type TaskActions struct{ Store TaskWriter }
 type SubmitOptions struct {
 	ReviewPlan      bool
 	ReviewCitations bool
+	GuestAddress    string
 }
 
 func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID string, options SubmitOptions, attachments ...Material) (model.TaskSnapshot, error) {
@@ -74,7 +75,13 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		rd = sha256.Sum256(append(append([]byte{0xfd}, rd[:]...), fingerprint[:]...))
 	}
 	var id string
-	err = s.Store.Write(ctx, tenant, true, func(tx repository.WriteTx) error {
+	guest := options.GuestAddress != ""
+	err = s.Store.Write(ctx, tenant, !guest, func(tx repository.WriteTx) error {
+		if guest {
+			if err := tx.EnsureGuestUser(tenant); err != nil {
+				return err
+			}
+		}
 		previous, err := tx.RequestKey(tenant, kd)
 		if err == nil {
 			if !bytes.Equal(previous.Digest, rd[:]) {
@@ -85,6 +92,15 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if guest {
+			allowed, err := tx.ConsumeGuestTrial(tenant, options.GuestAddress, service.GuestTrialLimit)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return service.ErrGuestTrialExhausted
+			}
 		}
 		if parentID != "" {
 			allowed, err := tx.CanFollowUp(tenant, parentID)
@@ -107,7 +123,11 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 			return err
 		}
 		if version == 0 && service.TrialEnabled() {
-			version, err = service.CreateTrial(tx, tenant, id)
+			if guest {
+				version, err = service.CreateTrialCredential(tx, tenant)
+			} else {
+				version, err = service.CreateTrial(tx, tenant, id)
+			}
 			if err != nil {
 				return err
 			}

@@ -52,7 +52,7 @@ func provideHealth(db *sql.DB, client *redis.Client, store *repository.Store) ha
 	}
 }
 func provideAuth(store *repository.Store, limiter handler.RateLimiter, cfg appConfig) handler.Auth {
-	return handler.Auth{Store: store, Origin: cfg.Origin, Limiter: limiter}
+	return handler.Auth{Store: store, Guests: store, Origin: cfg.Origin, Limiter: limiter}
 }
 
 type modelClient struct{ *http.Client }

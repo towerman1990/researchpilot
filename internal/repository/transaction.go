@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"researchpilot/internal/repository/query"
@@ -11,6 +12,7 @@ import (
 
 // WriteTx keeps related task and credential writes in a single transaction.
 type WriteTx struct {
+	db      *gorm.DB
 	tasks   query.ITaskSnapshotDo
 	configs query.IModelSummaryDo
 }
@@ -23,7 +25,7 @@ func (s *Store) Write(ctx context.Context, tenant string, lockUser bool, action 
 				return err
 			}
 		}
-		return action(WriteTx{tasks: tx.TaskSnapshot.WithContext(ctx), configs: tx.ModelSummary.WithContext(ctx)})
+		return action(WriteTx{db: tx.UnderlyingDB(), tasks: tx.TaskSnapshot.WithContext(ctx), configs: tx.ModelSummary.WithContext(ctx)})
 	})
 }
 

@@ -41,6 +41,7 @@ const errors = {
   model_http_403:'模型服务拒绝访问，请检查账号权限。',
   model_http_429:'模型服务限流，请稍后重试。',
   rate_limited:'请求过于频繁，请稍后重试。',
+  guest_trial_exhausted:'今日 3 次访客试用已用完，请登录或注册后继续。',
   trial_exhausted:'免费试用次数已用完，请在模型设置中配置自己的 API Key。',
   trial_unavailable:'免费试用服务暂不可用，请稍后重试或配置自己的 API Key。',
   model_configuration_revoked:'模型密钥已撤销，请重新配置。',
@@ -94,8 +95,10 @@ function appendHistory(current, incoming) {
 
 function App() {
   const [user,setUser] = useState(null);
-  const [sessionCheck,setSessionCheck] = useState(0);
-  const [sessionCheckError,setSessionCheckError] = useState('');
+  const [guestReady,setGuestReady] = useState(false);
+  const [authPrompt,setAuthPrompt] = useState(null);
+  const [authError,setAuthError] = useState('');
+  const [authBusy,setAuthBusy] = useState(false);
   const [register,setRegister] = useState(false);
   const [history,setHistory] = useState([]);
   const [historyCursor,setHistoryCursor] = useState('');
@@ -119,20 +122,36 @@ function App() {
 
   useEffect(() => {
     let active = true;
+    const scope = sessionScope.current;
     api('/api/v1/auth/session').then(() => {
-      if (active) setUser(true);
-    }, error => {
-      if (!active) return;
-      if (isSessionExpired(error)) {
-        setUser(false);
-      } else {
-        setSessionCheckError('暂时无法检查登录状态，请稍后重试。');
-      }
+      if (active && sessionScope.current === scope) setUser(true);
+    }, () => {
+      if (active && sessionScope.current === scope) setUser(false);
     });
     return () => { active = false; };
-  }, [sessionCheck]);
+  }, []);
 
-  function endSession(message = '') {
+  async function refreshGuest(scope) {
+    const info = await api('/api/v1/auth/guest', {});
+    if (sessionScope.current === scope) {
+      setModelInfo(info);
+      setGuestReady(true);
+    }
+  }
+
+  useEffect(() => {
+    if (user !== false) return;
+    const scope = sessionScope.current;
+    void refreshGuest(scope).catch(e => handleSessionError(scope, e));
+  }, [user]);
+
+  function openAuth(message = '') {
+    setRegister(false);
+    setAuthError('');
+    setAuthPrompt(message);
+  }
+
+  function endSession({keepDraft = false} = {}) {
     sessionScope.current = {};
     historyLoading.current = false;
     requestKey.current = null;
@@ -140,27 +159,29 @@ function App() {
     setHistory([]);
     setHistoryCursor('');
     setHistoryBusy(false);
-    setGoal('');
+    if (!keepDraft) setGoal('');
+    setGuestReady(false);
     setSettings(false);
     setPreferences(null);
     setPreferencesError(false);
     setModelInfo(null);
     setBusy(false);
-    setError(message);
+    setError('');
     setUser(false);
   }
 
   function handleSessionError(scope, error) {
     if (sessionScope.current !== scope) return;
     if (isSessionExpired(error)) {
-      endSession(error.message);
+      if (user) endSession();
+      openAuth(error.message);
     } else {
       setError(error.message);
     }
   }
 
   useEffect(() => {
-    if (!user) return;
+    if (!user && !guestReady) return;
     let active = true;
     const scope = sessionScope.current;
     fetchHistory().then(({items,next}) => {
@@ -169,7 +190,7 @@ function App() {
       setHistoryCursor(next);
     }, e => { if (active) handleSessionError(scope, e); });
     return () => { active = false; };
-  }, [user]);
+  }, [user,guestReady]);
 
   useEffect(() => {
     if (!user) return;
@@ -271,7 +292,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!selected || !user || selection.current.id !== selected) return;
+    if (!selected || (!user && !guestReady) || selection.current.id !== selected) return;
     const scope = selection.current;
     const session = sessionScope.current;
     const endpoint = path + '/' + selected;
@@ -350,7 +371,7 @@ function App() {
 
     void connect();
     return () => { generation++; stream?.close(); };
-  }, [selected,user]);
+  }, [selected,user,guestReady]);
 
   function select(id) {
     if (id === selection.current.id) return;
@@ -361,16 +382,17 @@ function App() {
 
   async function authenticate(event) {
     event.preventDefault();
-    setBusy(true); setError('');
+    setAuthBusy(true); setAuthError('');
     const form = new FormData(event.currentTarget);
     const credentials = {email:form.get('email'),password:form.get('password')};
     try {
       if (register) await api('/api/v1/auth/register',credentials);
       await api('/api/v1/auth/login',credentials);
-      sessionScope.current = {};
+      endSession({keepDraft: true});
+      setAuthPrompt(null);
       setUser(true);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+    } catch (e) { setAuthError(e.message); }
+    finally { setAuthBusy(false); }
   }
 
   async function submit(event, reviewPlan, attachments, reviewCitations) {
@@ -389,6 +411,8 @@ function App() {
     const scope = sessionScope.current;
     const source = selection.current;
     try {
+      if (!user && !guestReady) await refreshGuest(scope);
+      if (sessionScope.current !== scope) return;
       const payload = {goal:value};
       if (parentTaskID) payload.parent_task_id = parentTaskID;
       if (reviewPlan) payload.review_plan = true;
@@ -403,8 +427,15 @@ function App() {
       setHistory(old => [created,...old.filter(item => item.task_id !== created.task_id)]);
       if (!parentTaskID) setGoal('');
       if (requestKey.current === request) requestKey.current = null;
+      if (!user) void refreshGuest(scope).catch(() => {});
     } catch (e) {
-      handleSessionError(scope, e);
+      if (sessionScope.current !== scope) return;
+      if (e.code === 'guest_trial_exhausted') {
+        setModelInfo(info => ({...info, trial_remaining:0}));
+        openAuth(e.message);
+      } else {
+        handleSessionError(scope, e);
+      }
     } finally {
       if (sessionScope.current === scope) setBusy(false);
     }
@@ -482,14 +513,10 @@ function App() {
     }
   }
 
-  if (user === null) return <main className="auth-page">
-    {sessionCheckError ? <div><p role="alert">{sessionCheckError}</p><button onClick={() => {
-      setSessionCheckError('');
-      setSessionCheck(attempt => attempt + 1);
-    }}>重试</button></div> : <p role="status">正在检查登录状态</p>}
-  </main>;
-  if (!user) return <AuthView {...{register,setRegister,authenticate,error,setError,busy}}/>;
-  return <Workspace readSource={api} readOverview={fetchOverview} {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,submitTask,approvePlan,busy,saveModel,activateModel,probeModel,revokeModel,preferences,preferencesError,loadPreferences,savePreferences,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
+  const authModal = <AuthView open={authPrompt !== null} message={authPrompt}
+    onClose={() => setAuthPrompt(null)} error={authError} setError={setAuthError} busy={authBusy}
+    {...{register,setRegister,authenticate}}/>;
+  return <Workspace user={user} openAuth={openAuth} authModal={authModal} sessionLoading={user === null} readSource={api} readOverview={fetchOverview} {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,submitTask,approvePlan,busy,saveModel,activateModel,probeModel,revokeModel,preferences,preferencesError,loadPreferences,savePreferences,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
 }
 
 createRoot(document.getElementById('root')).render(<App/>);

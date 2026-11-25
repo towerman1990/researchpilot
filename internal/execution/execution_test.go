@@ -370,7 +370,7 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 	h := server.New(server.WithListener(ln), server.WithTransport(standard.NewTransporter))
 	h.Use(httpserver.AccessLog)
-	auth := handler.Auth{Store: store, Origin: "http://" + ln.Addr().String()}
+	auth := handler.Auth{Store: store, Guests: store, Origin: "http://" + ln.Addr().String()}
 	auth.RegisterRoutes(h)
 	handler.Models{Service: service.Models{Store: store}, Auth: auth}.RegisterRoutes(h)
 	handler.Tasks{Actions: taskservice.TaskActions{Store: store}, Auth: auth, Service: taskservice.Tasks{Store: store}, Stream: taskservice.EventStream{Store: store}}.RegisterRoutes(h)
@@ -423,6 +423,11 @@ func TestPartialAndExpiredEventsIntegration(t *testing.T) {
 		check("GET", "/api/v1/research/overview", "", 401)
 		check("GET", "/api/v1/research/tasks/"+e.Task+"/report/evidence", "", 401)
 		check("GET", "/api/v1/research/tasks/"+e.Task+"/report/feedback", "", 401)
+		check("POST", "/api/v1/auth/guest", "{}", 200)
+		check("GET", "/api/v1/auth/session", "", 401)
+		check("GET", "/api/v1/research/tasks", "", 200)
+		check("GET", "/api/v1/research/tasks/"+e.Task, "", 404)
+		check("GET", "/api/v1/model-config", "", 401)
 		credentials := fmt.Sprintf("{\"email\":\"%s@example.test\",\"password\":\"fixture-password\"}", identity.New(16))
 		check("POST", "/api/v1/auth/register", credentials, 201)
 		check("POST", "/api/v1/auth/register", credentials, 409)

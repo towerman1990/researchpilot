@@ -1,7 +1,7 @@
 import React from 'react';
 const ReactMarkdown = React.lazy(() => import('react-markdown'));
 import {Alert, Button, Card, Checkbox, ConfigProvider, Empty, Input, Modal, Progress, Space, Tag, Typography} from 'antd';
-import {ArrowRightOutlined, BarChartOutlined, BookOutlined, CalendarOutlined, CheckCircleOutlined, CompassOutlined, DownloadOutlined, AppstoreOutlined, ExperimentOutlined, FileTextOutlined, HistoryOutlined, LockOutlined, LogoutOutlined, PlusOutlined, PrinterOutlined, SearchOutlined, SettingOutlined, AuditOutlined, SlidersOutlined, ThunderboltOutlined} from '@ant-design/icons';
+import {ArrowRightOutlined, BarChartOutlined, BookOutlined, CalendarOutlined, CheckCircleOutlined, CompassOutlined, DownloadOutlined, AppstoreOutlined, ExperimentOutlined, FileTextOutlined, HistoryOutlined, LogoutOutlined, PlusOutlined, PrinterOutlined, SearchOutlined, SettingOutlined, AuditOutlined, SlidersOutlined, ThunderboltOutlined} from '@ant-design/icons';
 import {ResearchEvaluation} from './ResearchEvaluation.jsx';
 import {ResearchSchedules} from './ResearchSchedules.jsx';
 import {ReportEvidence} from './ReportEvidence.jsx';
@@ -23,34 +23,39 @@ export function Theme({children}) {
 function Brand() { return <div className="brand"><img className="brand-mark" src={brandIcon} width={38} height={38} alt="" /><span><strong>ResearchPilot</strong><small>你的技术研究助手</small></span></div>; }
 function ErrorNotice({error}) {return error ? <Alert className="error-notice" type="error" showIcon message={error} role="alert"/> : null;}
 
-export function AuthView({register, setRegister, authenticate, error, setError, busy}) {
-  return <Theme><main className="auth-page"><div className="auth-shell">
-    <div className="auth-intro"><Brand/><div><Tag color="blue">RESEARCH WORKSPACE</Tag><h1>把复杂问题，<br/>变成清晰答案。</h1><p>从一个问题开始，收集可靠资料，整理有据可查的研究报告。</p></div><div className="auth-points"><span><SearchOutlined /> 探索公开资料</span><span><BookOutlined /> 保留引用来源</span><span><ThunderboltOutlined /> 实时追踪进度</span></div></div>
-    <div className="auth-card"><div className="mobile-brand"><Brand/></div><span className="eyebrow">WELCOME TO RESEARCHPILOT</span><h2>{register?'创建账户':'登录研究工作台'}</h2><p className="muted">{register?'创建账户后，即可开始你的第一项研究。':'欢迎回来，继续探索你的研究问题。'}</p>
-      <ErrorNotice error={error}/><form onSubmit={authenticate} className="auth-form">
-        <label>邮箱<Input size="large" type="email" name="email" required autoComplete="email" placeholder="name@example.com"/></label>
-        <label>密码<Input.Password size="large" name="password" required minLength={register?10:undefined} autoComplete={register?'new-password':'current-password'} placeholder={register?'至少 10 字节':'输入密码'}/></label>
-        <Button block size="large" type="primary" htmlType="submit" loading={busy}>{register?'注册并登录':'登录'}</Button>
-        <Button block type="link" onClick={()=>{setRegister(!register);setError('');}}>{register?'返回登录':'创建账户'}</Button>
-      </form><p className="auth-foot"><LockOutlined /> 你的研究记录保存在账户中</p>
-    </div></div></main></Theme>;
+export function AuthView({open, onClose, message, register, setRegister, authenticate, error, setError, busy}) {
+  return <Modal open={open} title={register?'创建账户':'登录研究工作台'} footer={null}
+    onCancel={onClose} closable={!busy} keyboard={!busy} maskClosable={!busy} destroyOnHidden>
+    {message && <p className="muted">{message}</p>}
+    <ErrorNotice error={error}/>
+    <form onSubmit={authenticate} className="auth-form">
+      <label>邮箱<Input size="large" type="email" name="email" required autoComplete="email" placeholder="name@example.com"/></label>
+      <label>密码<Input.Password size="large" name="password" required minLength={register?10:undefined} autoComplete={register?'new-password':'current-password'} placeholder={register?'至少 10 字节':'输入密码'}/></label>
+      <Button block size="large" type="primary" htmlType="submit" loading={busy}>{register?'注册并登录':'登录'}</Button>
+      <Button block type="link" disabled={busy} onClick={()=>{setRegister(!register);setError('');}}>{register?'返回登录':'创建账户'}</Button>
+    </form>
+  </Modal>;
 }
 
-function Sidebar({history, historyCursor, historyBusy, loadMoreHistory, selected, select, settings, setSettings, setModelInfo, logout}) {
+function Sidebar({history, historyCursor, historyBusy, loadMoreHistory, selected, select, settings, setSettings, setModelInfo, logout, user, openAuth}) {
   function newResearch(){setSettings(false);select('');}
   return <aside className="sidebar"><Brand/><Button type="primary" size="large" block icon={<PlusOutlined/>} onClick={newResearch}>新建研究</Button>
-    <nav className="side-nav"><button className={!settings?'nav-item active':'nav-item'} onClick={newResearch}><CompassOutlined/> 研究工作台</button><button className={settings==='taskOverview'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('taskOverview');}}><AppstoreOutlined/> 多任务工作区</button><button className={settings==='schedules'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('schedules');}}><CalendarOutlined/> 定时研究</button><button className={settings==='model'?'nav-item active':'nav-item'} onClick={()=>{if(settings!=='model'){setModelInfo(null);setSettings('model');}}}><SettingOutlined/> 模型设置</button><button className={settings==='preferences'?'nav-item active':'nav-item'} onClick={()=>setSettings('preferences')}><SlidersOutlined/> 研究偏好</button><button className={settings==='usage'?'nav-item active':'nav-item'} onClick={()=>setSettings('usage')}><BarChartOutlined/> 研究用量</button>
-      <button className={settings==='evaluation'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('evaluation');}}><AuditOutlined/> 研究评估</button></nav>
+    <nav className="side-nav"><button className={!settings?'nav-item active':'nav-item'} onClick={newResearch}><CompassOutlined/> 研究工作台</button>{user && <><button className={settings==='taskOverview'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('taskOverview');}}><AppstoreOutlined/> 多任务工作区</button><button className={settings==='schedules'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('schedules');}}><CalendarOutlined/> 定时研究</button><button className={settings==='model'?'nav-item active':'nav-item'} onClick={()=>{if(settings!=='model'){setModelInfo(null);setSettings('model');}}}><SettingOutlined/> 模型设置</button><button className={settings==='preferences'?'nav-item active':'nav-item'} onClick={()=>setSettings('preferences')}><SlidersOutlined/> 研究偏好</button><button className={settings==='usage'?'nav-item active':'nav-item'} onClick={()=>setSettings('usage')}><BarChartOutlined/> 研究用量</button>
+      <button className={settings==='evaluation'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('evaluation');}}><AuditOutlined/> 研究评估</button></>}</nav>
     <div className="side-heading"><span>研究历史</span><HistoryOutlined/></div><div className="history-list">{!history.length && <p className="side-empty">暂无研究记录</p>}{history.map(item=><button key={item.task_id} className="history" aria-current={!settings&&selected===item.task_id?'page':undefined} onClick={()=>{setSettings(false);select(item.task_id);}}><FileTextOutlined/><span><b>{item.goal}</b><small>{labels[item.status]}</small></span></button>)}{historyCursor && <Button type="link" block loading={historyBusy} onClick={loadMoreHistory}>加载更早的记录</Button>}</div>
-    <div className="sidebar-footer"><span className="online-dot"/> 研究空间<Button type="text" icon={<LogoutOutlined/>} onClick={logout}>退出登录</Button></div>
+    <div className="sidebar-footer"><span className="online-dot"/> {user ? '研究空间' : '访客模式'}{user
+      ? <Button type="text" icon={<LogoutOutlined/>} onClick={logout}>退出登录</Button>
+      : <Button type="text" onClick={() => openAuth()}>登录 / 注册</Button>}</div>
   </aside>;
 }
-function TrialInfo({modelInfo}) {
+function TrialInfo({modelInfo, user}) {
+  if (!user && !modelInfo) return <><ThunderboltOutlined/> 访客每天可试用 3 次</>;
+  if (modelInfo?.guest) return <><ThunderboltOutlined/> 今日访客试用剩余 {modelInfo.trial_remaining} / {modelInfo.trial_limit} 次{!modelInfo.trial_enabled && '（演示模式）'}</>;
   if (modelInfo?.configured) return <><CheckCircleOutlined/> 当前使用自己的模型配置</>;
   if (modelInfo?.trial_enabled) return <><ThunderboltOutlined/> 免费试用剩余 {modelInfo.trial_remaining} / {modelInfo.trial_limit} 次</>;
   return <><ExperimentOutlined/> 未配置模型时将运行演示任务</>;
 }
-function NewResearch({goal,setGoal,submit,busy,modelInfo}) {
+function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading}) {
   const [reviewPlan,setReviewPlan] = React.useState(false);
   const [reviewCitations,setReviewCitations] = React.useState(false);
   const [attachments,setAttachments] = React.useState([]);
@@ -98,7 +103,7 @@ function NewResearch({goal,setGoal,submit,busy,modelInfo}) {
       </div>
       <div className="plan-review-option"><Checkbox checked={reviewPlan} onChange={event => setReviewPlan(event.target.checked)}>先生成计划，由我确认后开始查资料</Checkbox></div>
       <div className="plan-review-option"><Checkbox checked={reviewCitations} onChange={event => setReviewCitations(event.target.checked)}>发布前复核引用（额外消耗 Token）</Checkbox></div>
-      <div className="composer-footer"><span className="model-hint"><TrialInfo modelInfo={modelInfo}/></span><Button type="primary" size="large" htmlType="submit" disabled={busy||reading||Boolean(attachmentError)||!goal.trim()} loading={busy} icon={<ArrowRightOutlined/>} iconPosition="end">开始研究</Button></div></form></Card>
+      <div className="composer-footer"><span className="model-hint"><TrialInfo modelInfo={modelInfo} user={user}/></span><Button type="primary" size="large" htmlType="submit" disabled={sessionLoading||busy||reading||Boolean(attachmentError)||!goal.trim()} loading={busy} icon={<ArrowRightOutlined/>} iconPosition="end">开始研究</Button></div></form></Card>
     <div className="tips-header"><strong>从这里开始</strong><span>让研究目标更清晰</span></div><div className="tip-grid"><div><span><CompassOutlined/></span><strong>明确研究方向</strong><p>描述背景和需要解决的问题。</p></div><div><span><BookOutlined/></span><strong>提供参考资料</strong><p>可以附上公开网页或 GitHub 链接。</p></div><div><span><FileTextOutlined/></span><strong>查看引用报告</strong><p>跟踪过程并核对报告中的来源。</p></div></div>
   </div>;
 }
@@ -319,6 +324,7 @@ function ResearchDetail({task,events,report,connection,errors,cancelTask,downloa
 }
 export function Workspace(props) {
   const {
+    user, openAuth, authModal, sessionLoading,
     history, historyCursor, historyBusy, loadMoreHistory, selected, select, settings, setSettings, setModelInfo,
     logout, error, modelInfo, goal, setGoal, submit, submitTask, approvePlan, busy, saveModel, activateModel,
     probeModel, revokeModel, preferences, preferencesError, loadPreferences, savePreferences,
@@ -359,15 +365,16 @@ export function Workspace(props) {
         title = '研究详情';
         content = <ResearchDetail {...{task,events,report,connection,errors,cancelTask,downloadReport,busy,submitTask,select,approvePlan,readSource}}/>;
       } else {
-        content = <NewResearch {...{goal,setGoal,submit,busy,modelInfo}}/>;
+        content = <NewResearch {...{goal,setGoal,submit,busy,modelInfo,user,sessionLoading}}/>;
       }
   }
 
   return <Theme><div className="workspace">
-    <Sidebar {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout}}/>
+    <Sidebar {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,user,openAuth}}/>
     <main className="main-area">
       <div className="topbar"><span>{title}</span><span className="topbar-right"><span className="online-dot"/> ResearchPilot</span></div>
       <div className="main-content"><ErrorNotice error={error}/>{content}</div>
     </main>
+    {authModal}
   </div></Theme>;
 }

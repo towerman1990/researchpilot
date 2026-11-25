@@ -37,6 +37,9 @@ func (h Tasks) events(ctx context.Context, c *app.RequestContext) {
 	}
 	c.Header("X-Accel-Buffering", "no")
 	sink := eventSink{writer: sse.NewWriter(c), conn: c.GetConn(), task: id, check: func() error {
+		if c.GetBool(guestKey) {
+			return nil
+		}
 		_, err := service.SessionUser(ctx, h.Auth.Store, string(c.Cookie(sessionCookie)))
 		return err
 	}}

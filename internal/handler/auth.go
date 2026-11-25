@@ -28,12 +28,16 @@ type Auth struct {
 	Store   service.AuthStore
 	Origin  string
 	Limiter RateLimiter
+	Guests  interface {
+		GuestTrialUsed(context.Context, string, string) (int, error)
+	}
 }
 
 const sessionCookie = "rp_session"
 const tenantKey = "researchpilot.tenant"
 
 func (h Auth) RegisterRoutes(r route.IRouter) {
+	r.POST("/api/v1/auth/guest", h.requireJSON, h.guestSession)
 	r.POST("/api/v1/auth/register", h.requireJSON, h.register)
 	r.POST("/api/v1/auth/login", h.requireJSON, h.login)
 	r.GET("/api/v1/auth/session", h.apiHeaders, h.requireSession, h.session)
@@ -103,13 +107,16 @@ type credentials struct {
 	Password string
 }
 
-func (h Auth) readCredentials(ctx context.Context, c *app.RequestContext, input *credentials) bool {
+func clientAddress(ctx context.Context, c *app.RequestContext) string {
 	var forwarded []string
 	for _, value := range c.Request.Header.PeekAll("X-Forwarded-For") {
 		forwarded = append(forwarded, string(value))
 	}
-	ip := requestmeta.ClientAddress(ctx, c.RemoteAddr().String(), forwarded)
-	return h.allow(ctx, c, "auth-ip", ip, envconfig.Int("RATE_AUTH_IP", 30, 1, 10000)) && parseJSON(c, input)
+	return requestmeta.ClientAddress(ctx, c.RemoteAddr().String(), forwarded)
+}
+
+func (h Auth) readCredentials(ctx context.Context, c *app.RequestContext, input *credentials) bool {
+	return h.allow(ctx, c, "auth-ip", clientAddress(ctx, c), envconfig.Int("RATE_AUTH_IP", 30, 1, 10000)) && parseJSON(c, input)
 }
 func (h Auth) register(ctx context.Context, c *app.RequestContext) {
 	var input credentials
@@ -154,6 +161,7 @@ func (h Auth) requireSession(ctx context.Context, c *app.RequestContext) {
 	}
 	user, err := service.SessionUser(ctx, h.Store, token)
 	if errors.Is(err, sql.ErrNoRows) {
+		h.setCookie(c, "", -1)
 		problem(c, 401, "authentication_required")
 		c.Abort()
 		return
