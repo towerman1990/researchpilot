@@ -106,7 +106,7 @@ func publishPartial(ctx context.Context, tx *repository.ExecutionTx, d delivery,
 		draft.Findings = append(draft.Findings, struct {
 			Text    string   `json:"text"`
 			Sources []string `json:"sources"`
-		}{Text: "资料摘录：" + textutil.Clip(s.Excerpt, 1000), Sources: []string{s.ID}})
+		}{Text: "资料原文摘录：" + textutil.Clip(s.Excerpt, 1000), Sources: []string{s.ID}})
 	}
 	body, citations, err := renderReport(draft, sources)
 	if err != nil {

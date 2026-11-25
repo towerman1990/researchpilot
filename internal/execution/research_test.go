@@ -146,6 +146,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				if err := json.Unmarshal(raw, &request); err != nil {
 					t.Fatal(err)
 				}
+				if !strings.Contains(request.Messages[1].Content, "即使参考资料是英文，也用中文归纳和解释。") {
+					t.Fatal("report prompt must specify Chinese prose even for English evidence")
+				}
 				if options.compactSynthesis && len(request.Messages[1].Content) > 7500 {
 					t.Fatal("full synthesis prompt was sent despite the budget limit")
 				}
@@ -153,11 +156,11 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				if len(ids) != 2 {
 					t.Fatal("model prompt lacks persisted evidence")
 				}
-				findings := []map[string]any{{"text": "The evidence supports durable execution.", "sources": []string{ids[1]}}}
+				findings := []map[string]any{{"text": "证据表明该系统支持可靠执行。", "sources": []string{ids[1]}}}
 				if options.reviewCitations {
 					findings = append(findings, map[string]any{"text": "Unsupported fixture claim", "sources": []string{ids[1]}})
 				}
-				encoded, _ := json.Marshal(map[string]any{"findings": findings, "limitations": []string{"Fixture evidence."}})
+				encoded, _ := json.Marshal(map[string]any{"findings": findings, "limitations": []string{"现有证据仅覆盖测试场景。"}})
 				content = string(encoded)
 			}
 			if strings.Contains(string(raw), "Assess evidence coverage") {
@@ -257,7 +260,7 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 		expectedStatus = "PARTIAL"
 		expectedUsage += 100
 		report, err := worker.store.ReadReport(t.Context(), d.Tenant, d.Task)
-		if err != nil || !strings.Contains(report, "The evidence supports durable execution.") || strings.Contains(report, "Unsupported fixture claim") {
+		if err != nil || !strings.Contains(report, "证据表明该系统支持可靠执行。") || strings.Contains(report, "Unsupported fixture claim") {
 			t.Fatalf("cited findings were not filtered correctly: %q %v", report, err)
 		}
 	}
