@@ -70,7 +70,7 @@ func TestUploadedMaterialsIntegration(t *testing.T) {
 		switch {
 		case strings.Contains(string(body), "Assess evidence coverage"):
 			reply = "{\"sufficient\":true,\"gaps\":[]}"
-		case strings.Contains(string(body), "Every finding must cite"):
+		case strings.Contains(string(body), "每条结论必须引用证据中的来源 ID。"):
 			result, _ := json.Marshal(map[string]any{"findings": []map[string]any{{"text": file.Content, "sources": []string{source.ID}}}})
 			reply = string(result)
 		default:
