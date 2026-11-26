@@ -20,3 +20,4 @@
 - [M4 MyGo Windows 桌面原型](13-M3-DESKTOP.md)
 - [macOS 和 Linux 部署指南](14-MACOS-LINUX.md)
 - [公开知识库与 MCP 演示](15-KNOWLEDGE-MCP.md)
+- [M5 研究工作台增强发布记录](16-M5-RELEASE.md)
