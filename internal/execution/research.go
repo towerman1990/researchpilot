@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	agentcontract "researchpilot/internal/agent"
 	"researchpilot/internal/common/textutil"
 	evidencecontract "researchpilot/internal/evidence"
+	"researchpilot/internal/knowledge"
 	"researchpilot/internal/repository"
 	"researchpilot/internal/repository/model"
 	"researchpilot/internal/service"
@@ -107,6 +109,7 @@ type researchState struct {
 	failures       string
 	parentContext  string
 	preferences    model.ResearchPreferences
+	demoKnowledge  bool
 	draft          reportDraft
 	report         string
 	citations      []evidence
@@ -132,9 +135,14 @@ func (e execution) prepareResearch(ctx context.Context, state *researchState) (*
 		return nil, err
 	}
 	if raw := state.task.preferencesSnapshot; raw != nil {
-		if err := json.Unmarshal([]byte(*raw), &state.preferences); err != nil {
+		var snapshot struct {
+			model.ResearchPreferences
+			DemoKnowledge bool `json:"demo_knowledge"`
+		}
+		if err := json.Unmarshal([]byte(*raw), &snapshot); err != nil {
 			return nil, err
 		}
+		state.preferences, state.demoKnowledge = snapshot.ResearchPreferences, snapshot.DemoKnowledge
 	}
 	if state.task.parentTaskID == nil {
 		return state, nil
@@ -171,6 +179,13 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 		sources  []evidence
 		failures string
 	}
+	if state.demoKnowledge && (!state.task.requiresPlanReview || state.task.approvedPlan != nil) {
+		sources, err := e.retrieveDemoKnowledge(ctx, state.task.goal)
+		if err != nil {
+			return nil, err
+		}
+		state.sources = append(state.sources, sources...)
+	}
 	initial := roundState{sources: state.sources}
 	if len(initial.sources) > 0 && !state.task.requiresPlanReview {
 		// Check uploaded evidence before planning any external collection.
@@ -202,6 +217,42 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 	}
 	state.sources, state.failures = sources, failures
 	return state, nil
+}
+
+const knowledgeStep = "tool-0-knowledge"
+
+type knowledgeObservation struct {
+	Mode    string     `json:"mode"`
+	Sources []evidence `json:"sources"`
+}
+
+func (e execution) retrieveDemoKnowledge(ctx context.Context, goal string) ([]evidence, error) {
+	value, err := e.checkpoint(ctx, knowledgeStep, func(ctx context.Context) (string, error) {
+		passages, mode, err := knowledge.SearchDemo(ctx, goal, 4)
+		if err != nil {
+			return `{"error":"knowledge_search_unavailable"}`, nil
+		}
+		sources := make([]evidence, 0, len(passages))
+		for _, passage := range passages {
+			sources = append(sources, evidence{
+				Title: passage.Title + " · 知识库摘要 " + knowledge.DemoVersion,
+				URL:   passage.URL, Excerpt: passage.Excerpt,
+			})
+		}
+		slog.Info("knowledge_retrieval", "task_id", e.Task, "mode", mode, "hits", len(sources))
+		raw, err := json.Marshal(knowledgeObservation{Mode: mode, Sources: sources})
+		return string(raw), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	var observation knowledgeObservation
+	if json.Unmarshal([]byte(value), &observation) == nil {
+		return observation.Sources, nil
+	}
+	var sources []evidence
+	_ = json.Unmarshal([]byte(value), &sources)
+	return sources, nil
 }
 
 const planInstructions = `Return only a JSON object with one top-level key, "steps", containing 1–4 steps.

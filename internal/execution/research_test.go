@@ -65,6 +65,10 @@ func TestUnseededSearchResearchIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, webSearch: true})
 }
 
+func TestDemoKnowledgeIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, demoKnowledge: true})
+}
+
 func TestCompactSynthesisIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, compactSynthesis: true})
 }
@@ -84,7 +88,7 @@ func TestCitationReviewIntegration(t *testing.T) {
 }
 
 type researchFixtureOptions struct {
-	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch bool
+	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch, demoKnowledge bool
 }
 
 func researchFixture(t *testing.T, options researchFixtureOptions) {
@@ -109,10 +113,14 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	if strings.Contains(string(encrypted), "test-only-api-key") {
 		t.Fatal("API key stored in plaintext")
 	}
-	if review || options.reviewCitations {
+	if review || options.reviewCitations || options.demoKnowledge {
 		actions := taskservice.TaskActions{Store: executionStore(t, db)}
-		submit := taskservice.SubmitOptions{ReviewPlan: review, ReviewCitations: options.reviewCitations}
-		created, err := actions.Submit(t.Context(), d.Tenant, "plan-review-test", "Reviewable research goal", "", submit)
+		submit := taskservice.SubmitOptions{ReviewPlan: review, ReviewCitations: options.reviewCitations, DemoKnowledge: options.demoKnowledge}
+		goal := "Reviewable research goal"
+		if options.demoKnowledge {
+			goal = "HttpClient DNS PooledConnectionLifetime"
+		}
+		created, err := actions.Submit(t.Context(), d.Tenant, "plan-review-test", goal, "", submit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -246,6 +254,21 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	}
 	expectedStatus := "SUCCEEDED"
 	expectedUsage := 300
+	if options.demoKnowledge {
+		expectedUsage = 200
+		report, err := worker.store.ReadReport(t.Context(), d.Tenant, d.Task)
+		if err != nil || fetchedURL != "" || !strings.Contains(report, "知识库摘要 public-tech-v1") {
+			t.Fatalf("knowledge citation missing or external collection ran: %q %q %v", report, fetchedURL, err)
+		}
+		expectedMode := os.Getenv("TEST_KNOWLEDGE_EXPECT_MODE")
+		if expectedMode == "" {
+			expectedMode = "keyword"
+		}
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM task_events WHERE task_id=? AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.retrieval_mode'))=? AND JSON_EXTRACT(payload,'$.retrieval_hits')>0", d.Task, expectedMode).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("expected one successful %s retrieval event, got %d: %v", expectedMode, count, err)
+		}
+	}
 	if options.compactSynthesis {
 		expectedUsage = 25200
 	}

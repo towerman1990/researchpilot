@@ -43,6 +43,7 @@ type TaskActions struct{ Store TaskWriter }
 type SubmitOptions struct {
 	ReviewPlan      bool
 	ReviewCitations bool
+	DemoKnowledge   bool
 	GuestAddress    string
 }
 
@@ -65,6 +66,9 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 	}
 	if options.ReviewCitations {
 		rd = sha256.Sum256(append([]byte{0xfc}, rd[:]...))
+	}
+	if options.DemoKnowledge {
+		rd = sha256.Sum256(append([]byte{0xfb}, rd[:]...))
 	}
 	files, err := normalizeMaterials(attachments)
 	if err != nil {
@@ -118,6 +122,11 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		if err := tx.AddTask(tenant, id, goal, parentID, requestmeta.LogID(ctx), options.ReviewPlan, options.ReviewCitations, true); err != nil {
 			return err
 		}
+		if options.DemoKnowledge {
+			if err := tx.EnableDemoKnowledge(tenant, id); err != nil {
+				return err
+			}
+		}
 		version, err := tx.ActiveModelVersion(tenant)
 		if err != nil {
 			return err
@@ -132,7 +141,7 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 				return err
 			}
 		}
-		if (options.ReviewPlan || options.ReviewCitations) && version == 0 {
+		if (options.ReviewPlan || options.ReviewCitations || options.DemoKnowledge) && version == 0 {
 			return service.ErrModelNotConfigured
 		}
 		if version > 0 {

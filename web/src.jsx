@@ -395,17 +395,17 @@ function App() {
     finally { setAuthBusy(false); }
   }
 
-  async function submit(event, reviewPlan, attachments, reviewCitations) {
+  async function submit(event, reviewPlan, attachments, reviewCitations, demoKnowledge) {
     event.preventDefault();
-    await submitTask(goal, '', reviewPlan, attachments, reviewCitations);
+    await submitTask(goal, '', reviewPlan, attachments, reviewCitations, demoKnowledge);
   }
 
-  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false) {
+  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false, demoKnowledge = false) {
     setBusy(true); setError('');
     const value = question.trim();
     const attachmentKey = JSON.stringify(attachments);
-    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey) {
-      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,attachmentKey,id:newRequestID()};
+    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey || requestKey.current?.demoKnowledge !== demoKnowledge) {
+      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,demoKnowledge,attachmentKey,id:newRequestID()};
     }
     const request = requestKey.current;
     const scope = sessionScope.current;
@@ -417,6 +417,7 @@ function App() {
       if (parentTaskID) payload.parent_task_id = parentTaskID;
       if (reviewPlan) payload.review_plan = true;
       if (reviewCitations) payload.review_citations = true;
+      if (demoKnowledge) payload.demo_knowledge = true;
       if (attachments.length) payload.attachments = attachments;
       const created = await api(path,payload,{'Idempotency-Key':request.id});
       if (sessionScope.current !== scope) return;

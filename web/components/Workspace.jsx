@@ -56,6 +56,7 @@ function TrialInfo({modelInfo, user}) {
   return <><ExperimentOutlined/> 未配置模型时将运行演示任务</>;
 }
 function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading}) {
+  const [demoKnowledge,setDemoKnowledge] = React.useState(false);
   const [reviewPlan,setReviewPlan] = React.useState(false);
   const [reviewCitations,setReviewCitations] = React.useState(false);
   const [attachments,setAttachments] = React.useState([]);
@@ -91,7 +92,7 @@ function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading}) {
     }
   }
   return <div className="new-research"><div className="page-kicker"><span className="kicker-dot"/> RESEARCH WORKSPACE</div><h1>今天想研究什么？</h1><p className="hero-description">告诉 ResearchPilot 你的问题，我们会帮你整理资料、追踪过程并生成有来源的报告。</p>
-    <Card className="composer-card" bordered={false}><form onSubmit={event => submit(event,reviewPlan,attachments,reviewCitations)}><div className="composer-title"><span className="feature-icon"><SearchOutlined/></span><div><strong>发起一项研究</strong><p>描述背景、目标和你希望了解的问题</p></div></div><label className="field-label" htmlFor="research-goal">研究目标</label><TextArea id="research-goal" value={goal} onChange={e=>setGoal(e.target.value)} maxLength={2000} rows={5} placeholder="例如，我想为小团队选一款项目管理工具，请比较 Notion、Linear 和飞书的协作方式、成本与适用场景。" required showCount/>
+    <Card className="composer-card" bordered={false}><form onSubmit={event => submit(event,reviewPlan,attachments,reviewCitations,demoKnowledge)}><div className="composer-title"><span className="feature-icon"><SearchOutlined/></span><div><strong>发起一项研究</strong><p>描述背景、目标和你希望了解的问题</p></div></div><label className="field-label" htmlFor="research-goal">研究目标</label><TextArea id="research-goal" value={goal} onChange={e=>setGoal(e.target.value)} maxLength={2000} rows={5} placeholder="例如，我想为小团队选一款项目管理工具，请比较 Notion、Linear 和飞书的协作方式、成本与适用场景。" required showCount/>
       <div className="research-attachments">
         <label htmlFor="research-materials">补充研究资料（可选）</label>
         <input id="research-materials" type="file" accept=".txt,.md" multiple disabled={busy || reading} onChange={attach}/>
@@ -101,6 +102,7 @@ function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading}) {
         {(attachments.length > 0 || attachmentError) && <Button type="link" disabled={busy || reading}
           onClick={() => {setAttachments([]);setAttachmentError('');}}>清除资料</Button>}
       </div>
+      <div className="plan-review-option"><Checkbox checked={demoKnowledge} onChange={event => setDemoKnowledge(event.target.checked)}>先查公开知识库（.NET、ASP.NET Core、Go）</Checkbox></div>
       <div className="plan-review-option"><Checkbox checked={reviewPlan} onChange={event => setReviewPlan(event.target.checked)}>先生成计划，由我确认后开始查资料</Checkbox></div>
       <div className="plan-review-option"><Checkbox checked={reviewCitations} onChange={event => setReviewCitations(event.target.checked)}>发布前复核引用（额外消耗 Token）</Checkbox></div>
       <div className="composer-footer"><span className="model-hint"><TrialInfo modelInfo={modelInfo} user={user}/></span><Button type="primary" size="large" htmlType="submit" disabled={sessionLoading||busy||reading||Boolean(attachmentError)||!goal.trim()} loading={busy} icon={<ArrowRightOutlined/>} iconPosition="end">开始研究</Button></div></form></Card>

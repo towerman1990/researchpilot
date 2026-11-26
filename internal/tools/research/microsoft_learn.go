@@ -69,6 +69,10 @@ func microsoftDocsSearch(ctx context.Context, client *http.Client, input toolcon
 	if err := c.post(ctx, 0, "notifications/initialized", nil, nil); err != nil {
 		return nil, err
 	}
+	callID, err := c.findDocsSearch(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var result struct {
 		IsError bool `json:"isError"`
 		Content []struct {
@@ -76,7 +80,7 @@ func microsoftDocsSearch(ctx context.Context, client *http.Client, input toolcon
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	if err := c.post(ctx, 2, "tools/call", map[string]any{
+	if err := c.post(ctx, callID, "tools/call", map[string]any{
 		"name":      "microsoft_docs_search",
 		"arguments": map[string]string{"query": publicPhrase},
 	}, &result); err != nil {
@@ -116,6 +120,35 @@ func microsoftDocsSearch(ctx context.Context, client *http.Client, input toolcon
 		return nil, errors.New("mcp_no_document_results")
 	}
 	return sources, nil
+}
+
+func (c *learnSession) findDocsSearch(ctx context.Context) (int, error) {
+	params := map[string]string{}
+	for id := 2; id < 5; id++ {
+		var result struct {
+			NextCursor string `json:"nextCursor"`
+			Tools      []struct {
+				Name        string `json:"name"`
+				InputSchema struct {
+					Type       string                           `json:"type"`
+					Properties map[string]struct{ Type string } `json:"properties"`
+				} `json:"inputSchema"`
+			} `json:"tools"`
+		}
+		if err := c.post(ctx, id, "tools/list", params, &result); err != nil {
+			return 0, err
+		}
+		for _, tool := range result.Tools {
+			if tool.Name == "microsoft_docs_search" && tool.InputSchema.Type == "object" && tool.InputSchema.Properties["query"].Type == "string" {
+				return id + 1, nil
+			}
+		}
+		if result.NextCursor == "" || result.NextCursor == params["cursor"] {
+			break
+		}
+		params["cursor"] = result.NextCursor
+	}
+	return 0, errors.New("mcp_docs_search_unavailable")
 }
 
 func (c learnSession) request(ctx context.Context, method string, body io.Reader) (*http.Response, error) {

@@ -44,8 +44,10 @@ func TestMicrosoftLearnMCPFixedTopicAndSourceLinks(t *testing.T) {
 			body = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}}}}`
 		case "notifications/initialized":
 			status = http.StatusAccepted
+		case "tools/list":
+			body = `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"microsoft_docs_search","inputSchema":{"type":"object","properties":{"query":{"type":"string"}}}}]}}`
 		case "tools/call":
-			if message.ID != 2 || message.Params.Name != "microsoft_docs_search" ||
+			if message.ID != 3 || message.Params.Name != "microsoft_docs_search" ||
 				len(message.Params.Arguments) != 1 || message.Params.Arguments["query"] != "ASP.NET Core minimal API route handlers" {
 				t.Fatalf("unexpected outgoing arguments: %+v", message.Params)
 			}
@@ -57,7 +59,7 @@ func TestMicrosoftLearnMCPFixedTopicAndSourceLinks(t *testing.T) {
 			]}`
 			encoded, _ := json.Marshal(map[string]string{"type": "text", "text": results})
 			body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{}}\n\n" +
-				fmt.Sprintf("data: {\"jsonrpc\":\"2.0\",\"id\":2,\ndata: \"result\":{\"content\":[%s]}}\n\n", encoded)
+				fmt.Sprintf("data: {\"jsonrpc\":\"2.0\",\"id\":3,\ndata: \"result\":{\"content\":[%s]}}\n\n", encoded)
 		default:
 			t.Fatalf("unexpected method: %s", message.Method)
 		}
@@ -69,7 +71,7 @@ func TestMicrosoftLearnMCPFixedTopicAndSourceLinks(t *testing.T) {
 		t.Fatal("unrecognized topic reached the external transport")
 	}
 	sources, err := tools.Execute(t.Context(), toolcontract.Input{Tool: "microsoft_docs_search", Query: "aspnet-routing"})
-	if err != nil || calls != 4 || len(sources) != 1 || sources[0].URL != "https://learn.microsoft.com/aspnet/core" || sources[0].Excerpt != "Official excerpt" {
+	if err != nil || calls != 5 || len(sources) != 1 || sources[0].URL != "https://learn.microsoft.com/aspnet/core" || sources[0].Excerpt != "Official excerpt" {
 		t.Fatalf("unexpected results: %+v requests=%d error=%v", sources, calls, err)
 	}
 }

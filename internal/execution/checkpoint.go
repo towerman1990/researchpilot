@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -70,7 +71,16 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 		if err = tx.FinishStep(ctx, e.Tenant, e.Task, key, status, failure, attempt, e.epoch); err != nil {
 			return err
 		}
-		return eventUpdate(ctx, tx, e.delivery, locked, "tool_finished", map[string]any{"step_key": key, "tool_call_id": key, "attempt_no": attempt, "status": status, "summary": summary})
+		payload := map[string]any{"step_key": key, "tool_call_id": key, "attempt_no": attempt, "status": status, "summary": summary}
+		if key == knowledgeStep && status == "SUCCEEDED" {
+			var observation knowledgeObservation
+			if json.Unmarshal([]byte(value), &observation) == nil && observation.Mode != "" {
+				payload["retrieval_mode"] = observation.Mode
+				payload["retrieval_hits"] = len(observation.Sources)
+				payload["summary"] = fmt.Sprintf("公开知识库：%s，命中 %d 条", observation.Mode, len(observation.Sources))
+			}
+		}
+		return eventUpdate(ctx, tx, e.delivery, locked, "tool_finished", payload)
 	})
 	return value, err
 }
@@ -78,6 +88,16 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 func prepareCheckpointValue(ctx context.Context, tx *repository.ExecutionTx, d delivery, key, value string) (string, error) {
 	if !strings.HasPrefix(key, "tool-") {
 		return value, nil
+	}
+	if key == knowledgeStep {
+		var observation knowledgeObservation
+		if json.Unmarshal([]byte(value), &observation) == nil && observation.Mode != "" {
+			if err := storeSources(ctx, tx, d, observation.Sources); err != nil {
+				return "", err
+			}
+			encoded, err := json.Marshal(observation)
+			return string(encoded), err
+		}
 	}
 	var sources []evidence
 	if json.Unmarshal([]byte(value), &sources) != nil || len(sources) == 0 {

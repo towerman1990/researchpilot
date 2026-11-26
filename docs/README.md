@@ -19,3 +19,4 @@
 - [M3 Web 上线与发布](12-M3-RELEASE.md)
 - [M4 MyGo Windows 桌面原型](13-M3-DESKTOP.md)
 - [macOS 和 Linux 部署指南](14-MACOS-LINUX.md)
+- [公开知识库与 MCP 演示](15-KNOWLEDGE-MCP.md)

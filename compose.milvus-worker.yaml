@@ -1,0 +1,17 @@
+services:
+  worker:
+    environment:
+      KNOWLEDGE_EMBEDDING_URL: ${KNOWLEDGE_EMBEDDING_URL:?set the embedding endpoint}
+      KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:?set the embedding model}
+      KNOWLEDGE_EMBEDDING_KEY_FILE: /run/secrets/knowledge_embedding_key
+      KNOWLEDGE_MILVUS_URL: http://milvus:19530
+      KNOWLEDGE_MILVUS_COLLECTION: ${KNOWLEDGE_MILVUS_COLLECTION:?set the prepared Milvus collection}
+    depends_on:
+      milvus:
+        condition: service_healthy
+    secrets:
+      - knowledge_embedding_key
+
+secrets:
+  knowledge_embedding_key:
+    file: ${KNOWLEDGE_EMBEDDING_KEY_FILE:?set the host embedding key file path}
