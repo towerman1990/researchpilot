@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 
-	"researchpilot/internal/common/textutil"
 	"researchpilot/internal/repository/model"
 	toolcontract "researchpilot/internal/tools"
 )
@@ -91,7 +90,7 @@ func githubTreeSources(ctx context.Context, client *http.Client, api, repo, comm
 		}
 		if entry.Type == "blob" && (entry.Mode == "100644" || entry.Mode == "100755") {
 			files = append(files, entry.Path)
-			if entry.Size <= 256<<10 && dependencyManifest(entry.Path) {
+			if entry.Size <= githubDependencyLimit(entry.Path) && dependencyManifest(entry.Path) {
 				manifests = append(manifests, entry)
 			}
 		}
@@ -129,18 +128,18 @@ func githubTreeSources(ctx context.Context, client *http.Client, api, repo, comm
 			continue
 		}
 		escaped := escapeGitHubPath(file)
-		raw, err := requestTextLimit(ctx, client, api+"/contents/"+escaped+"?ref="+commit, rawHeaders, 256<<10)
+		raw, err := requestTextLimit(ctx, client, api+"/contents/"+escaped+"?ref="+commit, rawHeaders, int64(githubDependencyLimit(file)))
 		if err != nil {
 			continue
 		}
 		sources = append(sources, model.Source{
-			Title:   "Dependency manifest " + file + " at " + commit,
+			Title:   "Dependency file " + file + " at " + commit,
 			URL:     repo + "/blob/" + commit + "/" + escaped,
-			Excerpt: textutil.Clip(string(raw), 10000),
+			Excerpt: githubDependencyExcerpt(ctx, file, raw, 10000),
 		})
 	}
-	fmt.Fprintf(&evidence, "Manifest files read: %d of %d candidates (up to %d).\n", len(sources)-1, len(manifests), maxManifestReads)
-	writePathSummary(&evidence, "Dependency manifests", manifestPaths, len(manifests), 2000)
+	fmt.Fprintf(&evidence, "Dependency files read: %d of %d candidates (up to %d).\n", len(sources)-1, len(manifests), maxManifestReads)
+	writePathSummary(&evidence, "Dependency files", manifestPaths, len(manifests), 2000)
 	writePathSummary(&evidence, "Directories", directories[:min(len(directories), maxDirectoryLines)], len(directories), 2500)
 	writePathSummary(&evidence, "Files", files[:min(len(files), maxDirectoryLines)], len(files), 2500)
 	sources[0].Excerpt = evidence.String()
@@ -170,7 +169,7 @@ func compareRepoPaths(a, b string) int {
 
 func dependencyManifest(file string) bool {
 	switch path.Base(file) {
-	case "go.mod", "go.work", "package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "pom.xml", "build.gradle", "build.gradle.kts":
+	case "go.mod", "go.work", "package.json", "package-lock.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "pom.xml", "build.gradle", "build.gradle.kts":
 		return true
 	default:
 		return false
@@ -193,4 +192,19 @@ func escapeGitHubPath(file string) string {
 		parts[i] = url.PathEscape(parts[i])
 	}
 	return strings.Join(parts, "/")
+}
+
+func githubDependencyLimit(file string) int {
+	if path.Base(file) == "package-lock.json" {
+		return maxNPMLockfileBytes
+	}
+	return 256 << 10
+}
+
+func githubDependencyExcerpt(ctx context.Context, file string, raw []byte, limit int) string {
+	if path.Base(file) == "package-lock.json" {
+		goal, _ := ctx.Value(evidenceGoalKey{}).(string)
+		return githubNPMLockExcerpt(raw, goal)
+	}
+	return githubManifestExcerpt(file, raw, limit)
 }

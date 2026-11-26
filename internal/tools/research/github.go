@@ -102,19 +102,19 @@ func githubRepository(ctx context.Context, client *http.Client, input toolcontra
 		names = append(names, entry.Type+" "+entry.Name)
 	}
 	sources = append(sources, model.Source{Title: "Repository root at " + commit.SHA, URL: canonical, Excerpt: textutil.Clip(strings.Join(names, "\n"), 4000)})
-	allowedFiles := map[string]bool{"go.mod": true, "package.json": true, "Cargo.toml": true, "pyproject.toml": true, "requirements.txt": true}
+	allowedFiles := map[string]bool{"go.mod": true, "package.json": true, "package-lock.json": true, "Cargo.toml": true, "pyproject.toml": true, "requirements.txt": true}
 	filesRead := 0
 	for _, entry := range entries {
-		if !allowedFiles[entry.Name] || entry.Type != "file" || entry.Size > 256*1024 || filesRead >= 5 {
+		if !allowedFiles[entry.Name] || entry.Type != "file" || entry.Size > githubDependencyLimit(entry.Name) || filesRead >= 5 {
 			continue
 		}
 		headers["Accept"] = "application/vnd.github.raw+json"
-		file, err := requestTextLimit(ctx, client, base+"/contents/"+url.PathEscape(entry.Name)+"?ref="+commit.SHA, headers, 256<<10)
+		file, err := requestTextLimit(ctx, client, base+"/contents/"+url.PathEscape(entry.Name)+"?ref="+commit.SHA, headers, int64(githubDependencyLimit(entry.Name)))
 		if err != nil {
 			continue
 		}
 		filesRead++
-		sources = append(sources, model.Source{Title: entry.Name + " at " + commit.SHA, URL: "https://github.com/" + input.Owner + "/" + input.Repo + "/blob/" + commit.SHA + "/" + entry.Name, Excerpt: textutil.Clip(string(file), 12000)})
+		sources = append(sources, model.Source{Title: entry.Name + " at " + commit.SHA, URL: "https://github.com/" + input.Owner + "/" + input.Repo + "/blob/" + commit.SHA + "/" + entry.Name, Excerpt: githubDependencyExcerpt(ctx, entry.Name, file, 12000)})
 	}
 	return sources, nil
 }

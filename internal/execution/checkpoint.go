@@ -27,7 +27,7 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 		if e.Generation > 1 {
 			err = e.mutate(ctx, func(tx *repository.ExecutionTx, locked taskRow) error {
 				return eventUpdate(ctx, tx, e.delivery, locked, "checkpoint_reused", map[string]any{
-					"step_key": key, "generation": e.Generation,
+					"step_key": key, "generation": e.Generation, "role": checkpointResearchRole(key),
 				})
 			})
 		}
@@ -43,7 +43,7 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 		if err != nil {
 			return err
 		}
-		return eventUpdate(ctx, tx, e.delivery, locked, "step_started", map[string]any{"step_key": key, "tool_call_id": key, "attempt_no": attempt})
+		return eventUpdate(ctx, tx, e.delivery, locked, "step_started", map[string]any{"step_key": key, "role": checkpointResearchRole(key), "tool_call_id": key, "attempt_no": attempt})
 	})
 	if err != nil {
 		return "", err
@@ -80,7 +80,7 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 		if err = tx.FinishStep(ctx, e.Tenant, e.Task, key, status, failure, attempt, e.epoch); err != nil {
 			return err
 		}
-		payload := map[string]any{"step_key": key, "tool_call_id": key, "attempt_no": attempt, "status": status, "summary": summary}
+		payload := map[string]any{"step_key": key, "role": checkpointResearchRole(key), "tool_call_id": key, "attempt_no": attempt, "status": status, "summary": summary}
 		if (key == knowledgeStep || key == privateKnowledgeStep) && status == "SUCCEEDED" {
 			var observation knowledgeObservation
 			if json.Unmarshal([]byte(value), &observation) == nil && observation.Mode != "" {

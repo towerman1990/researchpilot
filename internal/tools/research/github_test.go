@@ -2,6 +2,8 @@ package research
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -91,7 +93,8 @@ func TestGitHubScopedTreePinsNestedManifest(t *testing.T) {
 		!strings.Contains(sources[0].Excerpt, "src/main.go") ||
 		strings.Contains(sources[0].Excerpt, "vendor/") ||
 		!strings.Contains(sources[1].URL, "/blob/"+commit+"/packages/") ||
-		!strings.Contains(sources[1].Excerpt, "example/dependency v1.2.3") {
+		!strings.Contains(sources[1].Excerpt, "example/dependency v1.2.3") ||
+		!strings.Contains(sources[1].Excerpt, `Direct requirement "example/dependency" "v1.2.3"`) {
 		t.Fatalf("missing or misleading repository evidence: %+v", sources)
 	}
 }
@@ -170,5 +173,116 @@ func TestGitHubFileURLsRejectAmbiguousLinks(t *testing.T) {
 		if source, raw := githubFileURLs(u); source != "" || raw != "" {
 			t.Fatalf("rewrote ambiguous URL %s", target)
 		}
+	}
+}
+
+func TestGitHubManifestDeclarations(t *testing.T) {
+	work := githubManifestExcerpt("group/go.work", []byte("go 1.25.0\nuse (\n ./api\n ../../outside\n)\n"), 10000)
+	if !strings.Contains(work, `Go workspace member "group/api"`) || strings.Contains(work, `Go workspace member "../../outside"`) {
+		t.Fatal(work)
+	}
+	module := githubManifestExcerpt("group/api/go.mod", []byte("module example/api\nreplace example/core => ../core\n"), 10000)
+	if !strings.Contains(module, `Local replacement "example/core" -> "group/core"`) {
+		t.Fatal(module)
+	}
+	pkg := githubManifestExcerpt("app/package.json", []byte(`{"name":"web","dependencies":{"core":"workspace:*","react":"^19.0.0"}}`), 10000)
+	if !strings.Contains(pkg, `Workspace dependency "core" "workspace:*"`) ||
+		!strings.Contains(pkg, `Declared dependency "react" "^19.0.0"`) {
+		t.Fatal(pkg)
+	}
+}
+
+func TestGitHubNPMLockUsesRootDirectRecords(t *testing.T) {
+	raw := []byte(`{"lockfileVersion":3,"packages":{"":{"dependencies":{"react":"^19.0.0","core":"file:../core","missing":"^1"}},"node_modules/react":{"version":"19.2.0"},"node_modules/core":{"link":true,"version":"fake"},"node_modules/transitive":{"version":"4.2.0"}}}`)
+	summary := githubDependencyExcerpt(t.Context(), "web/package-lock.json", raw, 10000)
+	if !strings.Contains(summary, `"react" declared "^19.0.0"; locked version "19.2.0"`) ||
+		!strings.Contains(summary, `"core" declared "file:../core"; linked package`) ||
+		!strings.Contains(summary, `"missing" declared "^1"; root installation record unavailable`) ||
+		strings.Contains(summary, "transitive") || strings.Contains(summary, "fake") {
+		t.Fatal(summary)
+	}
+	if got := githubNPMLockExcerpt([]byte(`{"lockfileVersion":1}`), ""); !strings.Contains(got, "unavailable") {
+		t.Fatal(got)
+	}
+}
+
+func TestGitHubNPMLockTracesNestedAndHoistedDependencies(t *testing.T) {
+	raw := []byte(`{"lockfileVersion":2,"packages":{
+		"":{"dependencies":{"@demo/app":"^1","shared":"^3"}},
+		"node_modules/@demo/app":{"version":"1.0.0","dependencies":{"shared":"^2","hoisted":"^4"},"optionalDependencies":{"absent":"^1"},"peerDependencies":{"peer":"^1"}},
+		"node_modules/@demo/app/node_modules/shared":{"version":"2.1.0","dependencies":{"@demo/app":"^1","leaf":"^5"}},
+		"node_modules/shared":{"version":"3.0.0"},
+		"node_modules/hoisted":{"version":"4.0.0"},
+		"node_modules/leaf":{"version":"5.0.0"},
+		"node_modules/peer":{"version":"1.0.0"}
+	}}`)
+	summary := githubNPMLockExcerpt(raw, "")
+	for _, expected := range []string{
+		`"@demo/app"@"1.0.0" -> "shared"@"2.1.0" (lockfile path "node_modules/@demo/app/node_modules/shared")`,
+		`"@demo/app"@"1.0.0" -> "hoisted"@"4.0.0"`,
+		`"@demo/app"@"1.0.0" -> "shared"@"2.1.0" -> "leaf"@"5.0.0"`,
+	} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("missing %s in %s", expected, summary)
+		}
+	}
+	for _, unexpected := range []string{`-> "shared"@"3.0.0"`, `-> "@demo/app"`, `-> "peer"`, `-> "absent"`} {
+		if strings.Contains(summary, unexpected) {
+			t.Fatalf("unexpected %s in %s", unexpected, summary)
+		}
+	}
+}
+
+func TestGitHubNPMLockFollowsLocalLinksFromTheirTargets(t *testing.T) {
+	raw := []byte(`{"lockfileVersion":3,"packages":{
+		"":{"workspaces":["packages/*"]},
+		"node_modules/@demo/app":{"link":true,"resolved":"packages/app"},
+		"packages/app":{"version":"1.0.0","dependencies":{"@demo/app":"*","shared":"^2"}},
+		"packages/app/node_modules/shared":{"version":"2.1.0","dependencies":{"leaf":"^5"}},
+		"node_modules/shared":{"version":"3.0.0"},
+		"node_modules/leaf":{"version":"5.0.0"},
+		"node_modules/outside":{"link":true,"resolved":"../outside"},
+		"../outside":{"version":"9.9.9"},
+		"node_modules/loop":{"link":true,"resolved":"packages/loop"},
+		"packages/loop":{"link":true,"resolved":"node_modules/loop"}
+	}}`)
+	summary := githubNPMLockExcerpt(raw, "")
+	for _, expected := range []string{
+		`"@demo/app" -> "packages/app"`,
+		`"@demo/app"@"1.0.0" -> "shared"@"2.1.0" (lockfile path "packages/app/node_modules/shared")`,
+		`"@demo/app"@"1.0.0" -> "shared"@"2.1.0" -> "leaf"@"5.0.0"`,
+	} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("missing %s in %s", expected, summary)
+		}
+	}
+	for _, unexpected := range []string{`"outside"`, `"loop"`, `-> "@demo/app"`, `"3.0.0"`} {
+		if strings.Contains(summary, unexpected) {
+			t.Fatalf("unexpected %s in %s", unexpected, summary)
+		}
+	}
+}
+
+func TestGitHubNPMLockPrioritizesRequestedPackageInLargeSummary(t *testing.T) {
+	packages := map[string]any{
+		"": map[string]any{"dependencies": map[string]string{"app": "^1"}},
+	}
+	children := map[string]string{"@demo/requested": "^2"}
+	for i := range 50 {
+		name := fmt.Sprintf("@demo/child-%02d", i)
+		children[name] = "^1"
+		packages["node_modules/"+name] = map[string]string{"version": "1.0.0"}
+	}
+	packages["node_modules/app"] = map[string]any{"version": "1.0.0", "dependencies": children}
+	packages["node_modules/@demo/requested"] = map[string]string{"version": "2.0.0"}
+	raw, err := json.Marshal(map[string]any{"lockfileVersion": 3, "packages": packages})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := githubDependencyExcerpt(WithEvidenceGoal(t.Context(), "分析 @demo/requested 的引入链"), "package-lock.json", raw, 10000)
+	path := `"app"@"1.0.0" -> "@demo/requested"@"2.0.0"`
+	relevant, ordinary := strings.Index(summary, path), strings.Index(summary, `-> "@demo/child-00"`)
+	if relevant < 0 || ordinary < 0 || relevant > ordinary {
+		t.Fatalf("requested package should come first: %s", summary)
 	}
 }

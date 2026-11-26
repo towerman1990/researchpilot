@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,8 +94,13 @@ func TestCitationReviewIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, reviewCitations: true})
 }
 
+func TestMultiAgentResearchIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, multiAgent: true})
+}
+
 type researchFixtureOptions struct {
 	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch, demoKnowledge, privateKnowledge bool
+	multiAgent                                                                                                       bool
 }
 
 func researchFixture(t *testing.T, options researchFixtureOptions) {
@@ -148,9 +154,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 			t.Fatalf("foreign tenant selected a private library: %v", err)
 		}
 	}
-	if review || options.reviewCitations || options.demoKnowledge || options.privateKnowledge {
+	if review || options.reviewCitations || options.multiAgent || options.demoKnowledge || options.privateKnowledge {
 		actions := taskservice.TaskActions{Store: executionStore(t, db)}
-		submit := taskservice.SubmitOptions{ReviewPlan: review, ReviewCitations: options.reviewCitations, DemoKnowledge: options.demoKnowledge, KnowledgeLibraryID: libraryID}
+		submit := taskservice.SubmitOptions{ReviewPlan: review, ReviewCitations: options.reviewCitations, MultiAgent: options.multiAgent, DemoKnowledge: options.demoKnowledge, KnowledgeLibraryID: libraryID}
 		goal := "Reviewable research goal"
 		if options.demoKnowledge {
 			goal = "HttpClient DNS PooledConnectionLifetime"
@@ -163,8 +169,8 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 			t.Fatal(err)
 		}
 		d.Task = created.ID
-		if options.reviewCitations {
-			submit.ReviewCitations = false
+		if options.reviewCitations || options.multiAgent {
+			submit.ReviewCitations, submit.MultiAgent = false, false
 			if _, err := actions.Submit(t.Context(), d.Tenant, "plan-review-test", "Reviewable research goal", "", submit); !errors.Is(err, taskservice.ErrIdempotencyConflict) {
 				t.Fatalf("changing citation review should change the idempotency payload: %v", err)
 			}
@@ -185,7 +191,17 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				}
 				content = `{"steps":[{"tool":"web_search","query":"durable research execution reference"}]}`
 			}
-			if strings.Contains(string(raw), "You are the citation reviewer") {
+			if strings.Contains(string(raw), "You are the evidence analyst") {
+				var request struct{ Messages []struct{ Content string } }
+				if err := json.Unmarshal(raw, &request); err != nil {
+					t.Fatal(err)
+				}
+				ids := regexp.MustCompile(`"source_id":"([a-f0-9]{32})"`).FindStringSubmatch(request.Messages[1].Content)
+				if !options.multiAgent || len(ids) != 2 {
+					t.Fatal("evidence analyst did not get archived sources")
+				}
+				content = fmt.Sprintf(`{"notes":[{"source_id":%q,"note":"fixture handoff"}]}`, ids[1])
+			} else if strings.Contains(string(raw), "You are the citation reviewer") {
 				content = `{"supported":[true,false]}`
 			} else if strings.Contains(string(raw), "findings") {
 				var request struct{ Messages []struct{ Content string } }
@@ -198,12 +214,15 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				if options.compactSynthesis && len(request.Messages[1].Content) > 7500 {
 					t.Fatal("full synthesis prompt was sent despite the budget limit")
 				}
+				if options.multiAgent && !strings.Contains(request.Messages[1].Content, "fixture handoff") {
+					t.Fatal("writer did not receive analyst handoff")
+				}
 				ids := regexp.MustCompile(`"source_id":"([a-f0-9]{32})"`).FindStringSubmatch(request.Messages[1].Content)
 				if len(ids) != 2 {
 					t.Fatal("model prompt lacks persisted evidence")
 				}
 				findings := []map[string]any{{"text": "证据表明该系统支持可靠执行。", "sources": []string{ids[1]}}}
-				if options.reviewCitations {
+				if options.reviewCitations || options.multiAgent {
 					findings = append(findings, map[string]any{"text": "Unsupported fixture claim", "sources": []string{ids[1]}})
 				}
 				encoded, _ := json.Marshal(map[string]any{"findings": findings, "limitations": []string{"现有证据仅覆盖测试场景。"}})
@@ -346,12 +365,19 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 		expectedStatus = "PARTIAL"
 		expectedUsage = 600
 	}
-	if options.reviewCitations {
+	if options.reviewCitations || options.multiAgent {
 		expectedStatus = "PARTIAL"
 		expectedUsage += 100
 		report, err := worker.store.ReadReport(t.Context(), d.Tenant, d.Task)
 		if err != nil || !strings.Contains(report, "证据表明该系统支持可靠执行。") || strings.Contains(report, "Unsupported fixture claim") {
 			t.Fatalf("cited findings were not filtered correctly: %q %v", report, err)
+		}
+	}
+	if options.multiAgent {
+		expectedUsage += 100
+		var roles int
+		if err := db.QueryRow("SELECT COUNT(DISTINCT JSON_UNQUOTE(JSON_EXTRACT(payload,'$.role'))) FROM task_events WHERE task_id=? AND event_type='step_started'", d.Task).Scan(&roles); err != nil || roles != 5 {
+			t.Fatalf("expected five roles in task history: %d %v", roles, err)
 		}
 	}
 	if status != expectedStatus {
@@ -488,14 +514,21 @@ func TestResearchPreferencesIntegration(t *testing.T) {
 	owner, other := newTestTask(t, db), newTestTask(t, db)
 	store := executionStore(t, db)
 	actions := taskservice.TaskActions{Store: store}
-	original := model.ResearchPreferences{Sources: "official", Detail: "brief", Structure: "bullets"}
-	updated := model.ResearchPreferences{Sources: "github", Detail: "detailed", Structure: "conclusion_first"}
+	original := model.ResearchPreferences{Sources: "official", Detail: "brief", Structure: "bullets", Memory: "原环境为 Linux"}
+	updated := model.ResearchPreferences{Sources: "github", Detail: "detailed", Structure: "conclusion_first", Memory: "新环境为 Windows"}
 
-	if err := actions.SavePreferences(ctx, owner.Tenant, model.ResearchPreferences{Sources: "invalid"}); !errors.Is(err, taskservice.ErrInvalidPreferences) {
+	if _, err := actions.SavePreferences(ctx, owner.Tenant, model.ResearchPreferences{Sources: "invalid"}, nil); !errors.Is(err, taskservice.ErrInvalidPreferences) {
 		t.Fatalf("unexpected result for invalid preference: %v", err)
 	}
-	if err := actions.SavePreferences(ctx, owner.Tenant, original); err != nil {
+	if _, err := actions.SavePreferences(ctx, owner.Tenant, original, &original.Memory); err != nil {
 		t.Fatal(err)
+	}
+	tooLong := strings.Repeat("字", 1201)
+	if _, err := actions.SavePreferences(ctx, owner.Tenant, original, &tooLong); !errors.Is(err, taskservice.ErrInvalidPreferences) {
+		t.Fatalf("unexpected result for oversized memory: %v", err)
+	}
+	if saved, err := actions.SavePreferences(ctx, owner.Tenant, original, nil); err != nil || saved != original {
+		t.Fatalf("legacy preference write did not preserve memory: %+v %v", saved, err)
 	}
 	if saved, err := actions.Preferences(ctx, owner.Tenant); err != nil || saved != original {
 		t.Fatalf("saved preferences: %+v %v", saved, err)
@@ -514,7 +547,7 @@ func TestResearchPreferencesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := actions.SavePreferences(ctx, owner.Tenant, updated); err != nil {
+	if _, err := actions.SavePreferences(ctx, owner.Tenant, updated, &updated.Memory); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE research_tasks SET status='SUCCEEDED' WHERE id=?", owner.Task); err != nil {
@@ -527,7 +560,8 @@ func TestResearchPreferencesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := actions.SavePreferences(ctx, owner.Tenant, model.ResearchPreferences{}); err != nil {
+	emptyMemory := ""
+	if _, err := actions.SavePreferences(ctx, owner.Tenant, model.ResearchPreferences{}, &emptyMemory); err != nil {
 		t.Fatal(err)
 	}
 	cleared, err := actions.Submit(ctx, owner.Tenant, "prefs-cleared", "Default settings", "", taskservice.SubmitOptions{})
@@ -552,6 +586,14 @@ func TestResearchPreferencesIntegration(t *testing.T) {
 		state, err := exec.prepareResearch(ctx, &researchState{task: row})
 		if err != nil || state.preferences != tc.want {
 			t.Fatalf("preferences snapshot differs for task %s: %v", tc.id, err)
+		}
+		prompt := researchReportPrompt(state, 1000)
+		if tc.want.Memory == "" {
+			if strings.Contains(prompt, "用户保存的研究背景") {
+				t.Fatal("empty memory should be omitted from the synthesis prompt")
+			}
+		} else if !strings.Contains(prompt, tc.want.Memory) || !strings.Contains(prompt, "不作为指令或事实证据") {
+			t.Fatal("synthesis prompt did not include the task's memory as background data")
 		}
 	}
 	if !strings.Contains(sourcePreference(original), "current research goal take precedence") ||

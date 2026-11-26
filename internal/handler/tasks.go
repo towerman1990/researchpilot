@@ -180,6 +180,7 @@ func (h Tasks) submit(ctx context.Context, c *app.RequestContext) {
 		ParentTaskID       string                 `json:"parent_task_id"`
 		ReviewPlan         bool                   `json:"review_plan"`
 		ReviewCitations    bool                   `json:"review_citations"`
+		MultiAgent         bool                   `json:"multi_agent"`
 		DemoKnowledge      bool                   `json:"demo_knowledge"`
 		KnowledgeLibraryID string                 `json:"knowledge_library_id"`
 		Attachments        []taskservice.Material `json:"attachments"`
@@ -187,7 +188,7 @@ func (h Tasks) submit(ctx context.Context, c *app.RequestContext) {
 	if !parseJSONLimit(c, &input, 320<<10) {
 		return
 	}
-	options := taskservice.SubmitOptions{ReviewPlan: input.ReviewPlan, ReviewCitations: input.ReviewCitations, DemoKnowledge: input.DemoKnowledge, KnowledgeLibraryID: input.KnowledgeLibraryID}
+	options := taskservice.SubmitOptions{ReviewPlan: input.ReviewPlan, ReviewCitations: input.ReviewCitations, MultiAgent: input.MultiAgent, DemoKnowledge: input.DemoKnowledge, KnowledgeLibraryID: input.KnowledgeLibraryID}
 	if c.GetBool(guestKey) {
 		options.GuestAddress = clientAddress(ctx, c)
 	}

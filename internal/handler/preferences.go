@@ -18,11 +18,15 @@ func (h Tasks) getPreferences(ctx context.Context, c *app.RequestContext) {
 }
 
 func (h Tasks) putPreferences(ctx context.Context, c *app.RequestContext) {
-	var preferences model.ResearchPreferences
-	if !parseJSON(c, &preferences) {
+	var input struct {
+		model.ResearchPreferences
+		Memory *string `json:"memory"`
+	}
+	if !parseJSONLimit(c, &input, 16<<10) {
 		return
 	}
-	if err := h.Actions.SavePreferences(ctx, c.GetString(tenantKey), preferences); err != nil {
+	preferences, err := h.Actions.SavePreferences(ctx, c.GetString(tenantKey), input.ResearchPreferences, input.Memory)
+	if err != nil {
 		writeFailure(c, err)
 		return
 	}

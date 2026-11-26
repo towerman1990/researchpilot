@@ -10,8 +10,15 @@ import (
 )
 
 func (s *Store) ReadResearchPreferences(ctx context.Context, tenant string) (model.ResearchPreferences, error) {
+	return readResearchPreferences(requireOne(s.q.TaskSnapshot.WithContext(ctx).ReadResearchPreferences(tenant)))
+}
+
+func (t WriteTx) ReadResearchPreferences(tenant string) (model.ResearchPreferences, error) {
+	return readResearchPreferences(requireOne(t.tasks.ReadResearchPreferences(tenant)))
+}
+
+func readResearchPreferences(raw string, err error) (model.ResearchPreferences, error) {
 	var preferences model.ResearchPreferences
-	raw, err := requireOne(s.q.TaskSnapshot.WithContext(ctx).ReadResearchPreferences(tenant))
 	if errors.Is(err, sql.ErrNoRows) {
 		return preferences, nil
 	}

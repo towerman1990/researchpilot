@@ -353,7 +353,7 @@ function App() {
         setConnection('正在恢复任务快照');
         void connect(true);
       });
-      for (const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','checkpoint_reused','plan_updated','replan_started','citation_review_started','citation_review_completed','report_ready']) {
+      for (const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','checkpoint_reused','plan_updated','replan_started','citation_review_started','citation_review_completed','evidence_brief_skipped','report_ready']) {
         source.addEventListener(type, event => {
           if (!ownsStream()) return;
           const value = JSON.parse(event.data);
@@ -399,17 +399,17 @@ function App() {
     finally { setAuthBusy(false); }
   }
 
-  async function submit(event, reviewPlan, attachments, reviewCitations, demoKnowledge, libraryID) {
+  async function submit(event, reviewPlan, attachments, reviewCitations, demoKnowledge, libraryID, multiAgent) {
     event.preventDefault();
-    await submitTask(goal, '', reviewPlan, attachments, reviewCitations, demoKnowledge, libraryID);
+    await submitTask(goal, '', reviewPlan, attachments, reviewCitations, demoKnowledge, libraryID, multiAgent);
   }
 
-  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false, demoKnowledge = false, libraryID = '') {
+  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false, demoKnowledge = false, libraryID = '', multiAgent = false) {
     setBusy(true); setError('');
     const value = question.trim();
     const attachmentKey = JSON.stringify(attachments);
-    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey || requestKey.current?.demoKnowledge !== demoKnowledge || requestKey.current?.libraryID !== libraryID) {
-      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,demoKnowledge,libraryID,attachmentKey,id:newRequestID()};
+    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey || requestKey.current?.demoKnowledge !== demoKnowledge || requestKey.current?.libraryID !== libraryID || requestKey.current?.multiAgent !== multiAgent) {
+      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,demoKnowledge,libraryID,multiAgent,attachmentKey,id:newRequestID()};
     }
     const request = requestKey.current;
     const scope = sessionScope.current;
@@ -421,6 +421,7 @@ function App() {
       if (parentTaskID) payload.parent_task_id = parentTaskID;
       if (reviewPlan) payload.review_plan = true;
       if (reviewCitations) payload.review_citations = true;
+      if (multiAgent) payload.multi_agent = true;
       if (demoKnowledge) payload.demo_knowledge = true;
       if (libraryID) payload.knowledge_library_id = libraryID;
       if (attachments.length) payload.attachments = attachments;

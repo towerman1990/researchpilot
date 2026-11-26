@@ -5,4 +5,5 @@ type ResearchPreferences struct {
 	Sources   string `json:"sources"`
 	Detail    string `json:"detail"`
 	Structure string `json:"structure"`
+	Memory    string `json:"memory,omitempty"`
 }

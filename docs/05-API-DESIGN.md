@@ -4,7 +4,7 @@
 |---|---|
 | POST /auth/register、/auth/login、/auth/refresh、/auth/logout | 注册登录、刷新轮换、撤销，Web 用安全 Cookie，桌面采用平台会话适配。 |
 | GET / POST /conversations | 游标列表或创建会话。P0 用于任务归组。 |
-| POST /research/tasks | 请求提供 `goal` 以及可选的 `parent_task_id`、`review_plan`、`review_citations`、`demo_knowledge`、`knowledge_library_id` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同请求内容时返回 409。 |
+| POST /research/tasks | 请求提供 `goal` 以及可选的 `parent_task_id`、`review_plan`、`review_citations`、`multi_agent`、`demo_knowledge`、`knowledge_library_id` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同请求内容时返回 409。 |
 | GET /research/tasks | 返回当前租户的任务数组，每页最多 50 条，按创建时间和任务 ID 降序排列。有更早的记录时，响应头 `X-Next-Cursor` 提供下一页的 `before` 值。 |
 | GET /research/tasks/{id} | 获取任务快照，包括状态、阶段和最新事件序号。 |
 | GET /research/tasks/{id}/events | SSE，按 Last-Event-ID 回放，也接受 after 用于初始连接。 |
@@ -27,7 +27,7 @@
 
 ## 研究偏好
 
-`GET /research/preferences` 读取当前账号的偏好，`PUT /research/preferences` 保存或替换。字段为 `sources`、`detail` 和 `structure`。来源支持 `official` 和 `github`，详略支持 `brief` 和 `detailed`，结构支持 `conclusion_first` 和 `bullets`。空值表示系统默认，提交空对象可清除已有偏好。非法值返回 422。
+`GET /research/preferences` 读取当前账号的偏好，`PUT /research/preferences` 保存或替换。字段为 `sources`、`detail` 和 `structure`。来源支持 `official` 和 `github`，详略支持 `brief` 和 `detailed`，结构支持 `conclusion_first` 和 `bullets`。空值表示系统默认，提交空对象可清除这三个偏好。可选字段 memory 保存用户主动填写的长期研究背景，去除首尾空白后最多 1200 个 Unicode 字符。省略 memory 会保留已有背景，传入空字符串可清除。非法值返回 422。创建研究、追问或定时任务时会为该次执行保存偏好与背景快照。
 
 新建任务和追问会保存当时的偏好快照，重试和计划审批恢复沿用该快照。Worker 将偏好作为默认要求，并优先遵循任务中用户明确提出的要求。
 

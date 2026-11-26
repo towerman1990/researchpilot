@@ -44,6 +44,7 @@ type TaskActions struct{ Store TaskWriter }
 type SubmitOptions struct {
 	ReviewPlan         bool
 	ReviewCitations    bool
+	MultiAgent         bool
 	DemoKnowledge      bool
 	KnowledgeLibraryID string
 	GuestAddress       string
@@ -68,6 +69,9 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 	}
 	if options.ReviewCitations {
 		rd = sha256.Sum256(append([]byte{0xfc}, rd[:]...))
+	}
+	if options.MultiAgent {
+		rd = sha256.Sum256(append([]byte{0xf9}, rd[:]...))
 	}
 	if options.DemoKnowledge {
 		rd = sha256.Sum256(append([]byte{0xfb}, rd[:]...))
@@ -140,6 +144,11 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 				return err
 			}
 		}
+		if options.MultiAgent {
+			if err := tx.EnableMultiAgent(tenant, id); err != nil {
+				return err
+			}
+		}
 		if libraryID != "" {
 			if err := tx.SelectKnowledgeLibrary(tenant, id, libraryID); errors.Is(err, sql.ErrNoRows) {
 				return ErrKnowledgeLibraryNotFound
@@ -161,7 +170,7 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 				return err
 			}
 		}
-		if (options.ReviewPlan || options.ReviewCitations || options.DemoKnowledge || libraryID != "") && version == 0 {
+		if (options.ReviewPlan || options.ReviewCitations || options.MultiAgent || options.DemoKnowledge || libraryID != "") && version == 0 {
 			return service.ErrModelNotConfigured
 		}
 		if version > 0 {
