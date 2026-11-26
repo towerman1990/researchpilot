@@ -63,22 +63,22 @@ try{
   await command('Page.enable');
   await command('Page.navigate',{url:base});
   await until("document.querySelector('textarea') && !document.querySelector('input[type=email]')","workbench without login");
-  const guestDraft = '访客第四次提交的研究草稿';
+  const guestDraft = '访客额度用完后的研究草稿';
   if (process.env.TEST_GUEST_TRIAL === '1') {
-    for (let i=1; i<=3; i++) {
+    for (let i=1; i<=5; i++) {
       await setInput('textarea','验证访客研究试用第 '+i+' 次');
       await until("[...document.querySelectorAll('button')].some(b=>b.textContent==='开始研究'&&!b.disabled)","enabled guest submit");
       await clickText('开始研究');
       await until(`document.querySelectorAll('button.history').length===${i}`,"guest task created");
       await clickText('新建研究');
     }
-    await until("document.querySelector('.model-hint')?.textContent.includes('0 / 3')","guest quota exhausted");
+    await until("document.querySelector('.model-hint')?.textContent.includes('0 / 5')","guest quota exhausted");
     const newVisitorQuota = await evaluate(`fetch('/api/v1/auth/guest',{method:'POST',credentials:'omit',
       headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()).then(info=>info.trial_remaining)`);
     if (newVisitorQuota !== 0) throw new Error('Guest quota must be shared by visitors on the same IP');
     await setInput('textarea',guestDraft);
     await clickText('开始研究');
-    await until("document.querySelector('[role=dialog]')?.textContent.includes('今日 3 次访客试用已用完')","fourth submission opens login dialog");
+    await until("document.querySelector('[role=dialog]')?.textContent.includes('今日访客试用已用完')","sixth submission opens login dialog");
   } else {
     await clickText('登录 / 注册');
   }

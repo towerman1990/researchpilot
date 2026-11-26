@@ -69,7 +69,7 @@ func TestGuestTrialQuotaIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if accepted != 2 || denied != 3 {
+	if accepted != 4 || denied != 1 {
 		t.Fatalf("accepted=%d denied=%d", accepted, denied)
 	}
 	if replay, err := actions.Submit(ctx, tenant, key, goal, "", options); err != nil || replay.ID != first.ID {
@@ -79,15 +79,15 @@ func TestGuestTrialQuotaIntegration(t *testing.T) {
 		t.Fatalf("quota used=%d err=%v", used, err)
 	}
 	options.GuestAddress += "-new"
-	for _, key := range []string{"guest-new-address-1", "guest-new-address-2"} {
+	for _, key := range []string{"guest-new-address-1", "guest-new-address-2", "guest-new-address-3", "guest-new-address-4"} {
 		if _, err := actions.Submit(ctx, tenant, key, goal, "", options); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := actions.Submit(ctx, tenant, "guest-new-address-3", goal, "", options); !errors.Is(err, service.ErrGuestTrialExhausted) {
+	if _, err := actions.Submit(ctx, tenant, "guest-new-address-5", goal, "", options); !errors.Is(err, service.ErrGuestTrialExhausted) {
 		t.Fatalf("browser limit after changing address: %v", err)
 	}
-	if used, err := store.GuestTrialUsed(ctx, identity.New(16), options.GuestAddress); err != nil || used != 2 {
+	if used, err := store.GuestTrialUsed(ctx, identity.New(16), options.GuestAddress); err != nil || used != 4 {
 		t.Fatalf("rejected submission should roll back address quota: used=%d err=%v", used, err)
 	}
 }

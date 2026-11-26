@@ -14,7 +14,7 @@ try {
     if($LASTEXITCODE){throw 'Go tests failed'}
     go vet ./...
     if($LASTEXITCODE){throw 'Go vet failed'}
-    node --test web/events.test.mjs
+    node --test web/events.test.mjs web/reportComparison.test.mjs web/retrievalEvaluation.test.mjs
     if($LASTEXITCODE){throw 'Frontend state tests failed'}
     npm --prefix web run build
     if($LASTEXITCODE){throw 'Frontend build failed'}

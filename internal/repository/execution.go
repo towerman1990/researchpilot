@@ -128,6 +128,9 @@ func (s *ExecutionTx) SourceByFingerprint(ctx context.Context, tenant, id string
 	return requireOne(s.q.TaskSnapshot.WithContext(ctx).FindExecutionSource(tenant, id, hex.EncodeToString(fingerprint[:])))
 }
 func (s *ExecutionTx) InsertSource(ctx context.Context, tenant, id string, source model.Source, fingerprint [32]byte) error {
+	if source.Type == "knowledge" {
+		return s.q.UnderlyingDB().WithContext(ctx).Exec("INSERT INTO research_sources(tenant_id,task_id,source_id,title,canonical_url,excerpt,fingerprint,source_type) VALUES(?,?,?,?,?,?,?,'knowledge')", tenant, id, source.ID, source.Title, source.URL, source.Excerpt, fingerprint[:]).Error
+	}
 	return s.q.TaskSnapshot.WithContext(ctx).InsertExecutionSource(tenant, id, source.ID, source.Title, source.URL, source.Excerpt, hex.EncodeToString(fingerprint[:]))
 }
 func (s *ExecutionTx) PartialReportSources(ctx context.Context, tenant, id string) ([]model.Source, error) {

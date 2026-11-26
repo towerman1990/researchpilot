@@ -6,7 +6,9 @@ import {ResearchEvaluation} from './ResearchEvaluation.jsx';
 import {ResearchSchedules} from './ResearchSchedules.jsx';
 import {ReportEvidence} from './ReportEvidence.jsx';
 import {ReportFeedback} from './ReportFeedback.jsx';
+import {ReportComparison} from './ReportComparison.jsx';
 import {TaskOverview} from './TaskOverview.jsx';
+import {KnowledgeView, LibrarySelect} from './KnowledgeView.jsx';
 import {UsageView} from './UsageView.jsx';
 import {terminal} from '../events.js';
 import brandIcon from '../researchpilot-icon.png';
@@ -15,7 +17,7 @@ const {Text} = Typography;
 const {TextArea} = Input;
 const labels = {QUEUED:'等待派发',RUNNING:'执行中',AWAITING_APPROVAL:'待确认计划',RETRY_WAIT:'等待重试',CANCELLING:'取消中',CANCELLED:'已取消',PARTIAL:'部分完成',SUCCEEDED:'已完成',FAILED:'执行失败'};
 const statusColors = {SUCCEEDED:'success',RUNNING:'processing',AWAITING_APPROVAL:'gold',QUEUED:'processing',PARTIAL:'warning',FAILED:'error',CANCELLED:'default',RETRY_WAIT:'warning'};
-const eventLabels = {task_status:'任务状态更新',step_started:'开始执行步骤',tool_started:'开始采集资料',tool_finished:'资料采集完成',usage_updated:'用量已更新',coverage_updated:'证据覆盖已更新',plan_updated:'研究计划已更新',replan_started:'调整研究计划',citation_review_started:'复核报告引用',citation_review_completed:'引用复核完成',report_ready:'研究报告已生成'};
+const eventLabels = {checkpoint_reused:'复用检查点',task_status:'任务状态更新',step_started:'开始执行步骤',tool_started:'开始采集资料',tool_finished:'资料采集完成',usage_updated:'用量已更新',coverage_updated:'证据覆盖已更新',plan_updated:'研究计划已更新',replan_started:'调整研究计划',citation_review_started:'复核报告引用',citation_review_completed:'引用复核完成',report_ready:'研究报告已生成'};
 
 export function Theme({children}) {
   return <ConfigProvider button={{autoInsertSpace:false}} theme={{token:{colorPrimary:'#2354d8',borderRadius:12,fontFamily:'Inter, "Microsoft YaHei", sans-serif',colorText:'#182540',colorBgLayout:'#f5f7fc'}}}>{children}</ConfigProvider>;
@@ -40,7 +42,7 @@ export function AuthView({open, onClose, message, register, setRegister, authent
 function Sidebar({history, historyCursor, historyBusy, loadMoreHistory, selected, select, settings, setSettings, setModelInfo, logout, user, openAuth}) {
   function newResearch(){setSettings(false);select('');}
   return <aside className="sidebar"><Brand/><Button type="primary" size="large" block icon={<PlusOutlined/>} onClick={newResearch}>新建研究</Button>
-    <nav className="side-nav"><button className={!settings?'nav-item active':'nav-item'} onClick={newResearch}><CompassOutlined/> 研究工作台</button>{user && <><button className={settings==='taskOverview'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('taskOverview');}}><AppstoreOutlined/> 多任务工作区</button><button className={settings==='schedules'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('schedules');}}><CalendarOutlined/> 定时研究</button><button className={settings==='model'?'nav-item active':'nav-item'} onClick={()=>{if(settings!=='model'){setModelInfo(null);setSettings('model');}}}><SettingOutlined/> 模型设置</button><button className={settings==='preferences'?'nav-item active':'nav-item'} onClick={()=>setSettings('preferences')}><SlidersOutlined/> 研究偏好</button><button className={settings==='usage'?'nav-item active':'nav-item'} onClick={()=>setSettings('usage')}><BarChartOutlined/> 研究用量</button>
+    <nav className="side-nav"><button className={!settings?'nav-item active':'nav-item'} onClick={newResearch}><CompassOutlined/> 研究工作台</button>{user && <><button className={settings==='knowledge'?'nav-item active':'nav-item'} onClick={()=>setSettings('knowledge')}><BookOutlined/> 私有知识库</button><button className={settings==='taskOverview'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('taskOverview');}}><AppstoreOutlined/> 多任务工作区</button><button className={settings==='schedules'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('schedules');}}><CalendarOutlined/> 定时研究</button><button className={settings==='model'?'nav-item active':'nav-item'} onClick={()=>{if(settings!=='model'){setModelInfo(null);setSettings('model');}}}><SettingOutlined/> 模型设置</button><button className={settings==='preferences'?'nav-item active':'nav-item'} onClick={()=>setSettings('preferences')}><SlidersOutlined/> 研究偏好</button><button className={settings==='usage'?'nav-item active':'nav-item'} onClick={()=>setSettings('usage')}><BarChartOutlined/> 研究用量</button>
       <button className={settings==='evaluation'?'nav-item active':'nav-item'} onClick={()=>{select('');setSettings('evaluation');}}><AuditOutlined/> 研究评估</button></>}</nav>
     <div className="side-heading"><span>研究历史</span><HistoryOutlined/></div><div className="history-list">{!history.length && <p className="side-empty">暂无研究记录</p>}{history.map(item=><button key={item.task_id} className="history" aria-current={!settings&&selected===item.task_id?'page':undefined} onClick={()=>{setSettings(false);select(item.task_id);}}><FileTextOutlined/><span><b>{item.goal}</b><small>{labels[item.status]}</small></span></button>)}{historyCursor && <Button type="link" block loading={historyBusy} onClick={loadMoreHistory}>加载更早的记录</Button>}</div>
     <div className="sidebar-footer"><span className="online-dot"/> {user ? '研究空间' : '访客模式'}{user
@@ -49,14 +51,16 @@ function Sidebar({history, historyCursor, historyBusy, loadMoreHistory, selected
   </aside>;
 }
 function TrialInfo({modelInfo, user}) {
-  if (!user && !modelInfo) return <><ThunderboltOutlined/> 访客每天可试用 3 次</>;
+  if (!user && !modelInfo) return <><ThunderboltOutlined/> 访客可免费试用</>;
   if (modelInfo?.guest) return <><ThunderboltOutlined/> 今日访客试用剩余 {modelInfo.trial_remaining} / {modelInfo.trial_limit} 次{!modelInfo.trial_enabled && '（演示模式）'}</>;
   if (modelInfo?.configured) return <><CheckCircleOutlined/> 当前使用自己的模型配置</>;
   if (modelInfo?.trial_enabled) return <><ThunderboltOutlined/> 免费试用剩余 {modelInfo.trial_remaining} / {modelInfo.trial_limit} 次</>;
   return <><ExperimentOutlined/> 未配置模型时将运行演示任务</>;
 }
-function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading}) {
+function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading,readSource}) {
   const [demoKnowledge,setDemoKnowledge] = React.useState(false);
+  const [libraryID,setLibraryID] = React.useState('');
+  React.useEffect(() => { if (!user) setLibraryID(''); }, [user]);
   const [reviewPlan,setReviewPlan] = React.useState(false);
   const [reviewCitations,setReviewCitations] = React.useState(false);
   const [attachments,setAttachments] = React.useState([]);
@@ -92,7 +96,7 @@ function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading}) {
     }
   }
   return <div className="new-research"><div className="page-kicker"><span className="kicker-dot"/> RESEARCH WORKSPACE</div><h1>今天想研究什么？</h1><p className="hero-description">告诉 ResearchPilot 你的问题，我们会帮你整理资料、追踪过程并生成有来源的报告。</p>
-    <Card className="composer-card" bordered={false}><form onSubmit={event => submit(event,reviewPlan,attachments,reviewCitations,demoKnowledge)}><div className="composer-title"><span className="feature-icon"><SearchOutlined/></span><div><strong>发起一项研究</strong><p>描述背景、目标和你希望了解的问题</p></div></div><label className="field-label" htmlFor="research-goal">研究目标</label><TextArea id="research-goal" value={goal} onChange={e=>setGoal(e.target.value)} maxLength={2000} rows={5} placeholder="例如，我想为小团队选一款项目管理工具，请比较 Notion、Linear 和飞书的协作方式、成本与适用场景。" required showCount/>
+    <Card className="composer-card" bordered={false}><form onSubmit={event => submit(event,reviewPlan,attachments,reviewCitations,demoKnowledge,user?libraryID:'')}><div className="composer-title"><span className="feature-icon"><SearchOutlined/></span><div><strong>发起一项研究</strong><p>描述背景、目标和你希望了解的问题</p></div></div><label className="field-label" htmlFor="research-goal">研究目标</label><TextArea id="research-goal" value={goal} onChange={e=>setGoal(e.target.value)} maxLength={2000} rows={5} placeholder="例如，我想为小团队选一款项目管理工具，请比较 Notion、Linear 和飞书的协作方式、成本与适用场景。" required showCount/>
       <div className="research-attachments">
         <label htmlFor="research-materials">补充研究资料（可选）</label>
         <input id="research-materials" type="file" accept=".txt,.md" multiple disabled={busy || reading} onChange={attach}/>
@@ -102,6 +106,7 @@ function NewResearch({goal,setGoal,submit,busy,modelInfo,user,sessionLoading}) {
         {(attachments.length > 0 || attachmentError) && <Button type="link" disabled={busy || reading}
           onClick={() => {setAttachments([]);setAttachmentError('');}}>清除资料</Button>}
       </div>
+      {user && <LibrarySelect read={readSource} value={libraryID} onChange={setLibraryID} disabled={busy}/>}
       <div className="plan-review-option"><Checkbox checked={demoKnowledge} onChange={event => setDemoKnowledge(event.target.checked)}>先查公开知识库（.NET、ASP.NET Core、Go）</Checkbox></div>
       <div className="plan-review-option"><Checkbox checked={reviewPlan} onChange={event => setReviewPlan(event.target.checked)}>先生成计划，由我确认后开始查资料</Checkbox></div>
       <div className="plan-review-option"><Checkbox checked={reviewCitations} onChange={event => setReviewCitations(event.target.checked)}>发布前复核引用（额外消耗 Token）</Checkbox></div>
@@ -218,7 +223,7 @@ function FollowUpForm({taskID, busy, submitTask}) {
   </form>;
 }
 
-function ReportCard({task, report, errors, downloadReport, busy, submitTask, readSource}) {
+function ReportCard({task, report, errors, downloadReport, busy, submitTask, readSource, comparison}) {
   const [source,setSource] = React.useState(null);
   const [showEvidence,setShowEvidence] = React.useState(false);
   const request = React.useRef(null);
@@ -244,6 +249,7 @@ function ReportCard({task, report, errors, downloadReport, busy, submitTask, rea
   const actions = report && <Space wrap>
     {task?.task_id && <Button icon={<BookOutlined/>} aria-expanded={showEvidence} aria-controls={showEvidence ? 'report-evidence' : undefined}
       onClick={() => setShowEvidence(current => !current)}>{showEvidence ? '收起证据' : '核查证据'}</Button>}
+    {task?.task_id && <ReportComparison taskID={task.task_id} read={readSource} report={report} {...comparison}/>}
     <Button icon={<DownloadOutlined/>} onClick={downloadReport}>下载 Markdown</Button>
     <Button icon={<PrinterOutlined/>} onClick={() => window.print()}>导出 PDF</Button>
   </Space>;
@@ -309,7 +315,7 @@ function PlanReview({rawPlan, sequence, busy, approvePlan}) {
   </Card>;
 }
 
-function ResearchDetail({task,events,report,connection,errors,cancelTask,downloadReport,busy,submitTask,select,approvePlan,readSource}) {
+function ResearchDetail({task,events,report,connection,errors,cancelTask,downloadReport,busy,submitTask,select,approvePlan,readSource,comparison}) {
   const percentage = task?.token_limit ? Math.min(100,Math.round(task.tokens_used/task.token_limit*100)) : 0;
   return <div className="detail-page"><div className="detail-top"><div><div className="page-kicker">RESEARCH DETAIL</div><h1>{task?.goal || '研究任务'}</h1></div><Tag className="status" color={statusColors[task?.status]||'default'} role="status">{labels[task?.status]||'正在加载'}</Tag></div><div className="detail-meta"><span><span className="online-dot"/> {connection||'研究过程与报告'}</span>{task && !terminal(task.status) && <Button disabled={task.status==='CANCELLING'} onClick={cancelTask}>取消研究</Button>}</div>
     {task?.creation_logid && <p className="task-log-id"><Text type="secondary">创建请求 Log ID </Text><Text code
@@ -319,9 +325,9 @@ function ResearchDetail({task,events,report,connection,errors,cancelTask,downloa
       {task?.status === 'AWAITING_APPROVAL' && task.review_plan
         ? <PlanReview key={task.task_id} rawPlan={task.review_plan} sequence={task.event_seq} {...{busy,approvePlan}}/>
         : <React.Suspense fallback={<Card className="report-card" bordered={false}><p role="status">正在加载报告…</p></Card>}>
-        <ReportCard key={task?.task_id} {...{task, report, errors, downloadReport, busy, submitTask, readSource}}/>
+        <ReportCard key={task?.task_id} {...{task, report, errors, downloadReport, busy, submitTask, readSource, comparison}}/>
       </React.Suspense>}
-      <div className="detail-side"><Card className="progress-card" bordered={false} title="研究进度"><div className="usage-label"><span>Token 用量</span><span>{task?.tokens_used || 0} / {task?.token_limit || '—'}</span></div><Progress percent={percentage} showInfo={false} size="small"/><p className="muted">{connection||'任务状态会自动更新'}</p></Card><Card className="timeline-card" bordered={false} title="运行记录">{!events.length&&!task?.calls?.length ? <p className="muted">执行记录将在这里显示。</p> : <><ul className="call-list">{task?.calls?.map(call=><li key={call.tool_call_id}>{call.tool_call_id} · 第 {call.attempt_no} 次 · {call.status}</li>)}</ul><ol className="event-list">{events.map(item=><li key={item.seq}><span className="event-dot"/><span>{item.type==='tool_finished'?(item.payload.summary||eventLabels[item.type]):labels[item.payload.status]||eventLabels[item.type]||item.type}</span></li>)}</ol></>}</Card></div>
+      <div className="detail-side"><Card className="progress-card" bordered={false} title="研究进度"><div className="usage-label"><span>Token 用量</span><span>{task?.tokens_used || 0} / {task?.token_limit || '—'}</span></div><Progress percent={percentage} showInfo={false} size="small"/><p className="muted">{connection||'任务状态会自动更新'}</p></Card><Card className="timeline-card" bordered={false} title="运行记录">{!events.length&&!task?.calls?.length ? <p className="muted">执行记录将在这里显示。</p> : <><ul className="call-list">{task?.calls?.map(call=><li key={call.tool_call_id}>{call.tool_call_id} · 第 {call.attempt_no} 次 · {call.status}</li>)}</ul><ol className="event-list">{events.map(item=><li key={item.seq}><span className="event-dot"/><span>{item.type==='tool_finished'?(item.payload.summary||eventLabels[item.type]):item.type==='checkpoint_reused'?`复用检查点 · ${item.payload.step_key}`:labels[item.payload.status]||eventLabels[item.type]||item.type}</span></li>)}</ol></>}</Card></div>
     </div></div>;
 }
 export function Workspace(props) {
@@ -340,6 +346,10 @@ export function Workspace(props) {
   let content;
   let title = '工作台';
   switch (settings) {
+    case 'knowledge':
+      title = '私有知识库';
+      content = user ? <KnowledgeView request={readSource}/> : null;
+      break;
     case 'schedules':
       content = <ResearchSchedules request={readSource} modelInfo={modelInfo} openTask={openTask}/>;
       break;
@@ -365,9 +375,10 @@ export function Workspace(props) {
     default:
       if (selected) {
         title = '研究详情';
-        content = <ResearchDetail {...{task,events,report,connection,errors,cancelTask,downloadReport,busy,submitTask,select,approvePlan,readSource}}/>;
+        content = <ResearchDetail comparison={{history,historyCursor,historyBusy,loadMoreHistory,openTask}}
+          {...{task,events,report,connection,errors,cancelTask,downloadReport,busy,submitTask,select,approvePlan,readSource}}/>;
       } else {
-        content = <NewResearch {...{goal,setGoal,submit,busy,modelInfo,user,sessionLoading}}/>;
+        content = <NewResearch {...{goal,setGoal,submit,busy,modelInfo,user,sessionLoading,readSource}}/>;
       }
   }
 

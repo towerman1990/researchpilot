@@ -103,17 +103,18 @@ func (e execution) setPhase(ctx context.Context, phase, kind string, payload any
 }
 
 type researchState struct {
-	task           taskRow
-	config         modelConfig
-	sources        []evidence
-	failures       string
-	parentContext  string
-	preferences    model.ResearchPreferences
-	demoKnowledge  bool
-	draft          reportDraft
-	report         string
-	citations      []evidence
-	reviewFiltered bool
+	task               taskRow
+	config             modelConfig
+	sources            []evidence
+	failures           string
+	parentContext      string
+	preferences        model.ResearchPreferences
+	demoKnowledge      bool
+	knowledgeLibraryID string
+	draft              reportDraft
+	report             string
+	citations          []evidence
+	reviewFiltered     bool
 }
 
 func (e execution) executeResearch(ctx context.Context, t taskRow) error {
@@ -137,12 +138,14 @@ func (e execution) prepareResearch(ctx context.Context, state *researchState) (*
 	if raw := state.task.preferencesSnapshot; raw != nil {
 		var snapshot struct {
 			model.ResearchPreferences
-			DemoKnowledge bool `json:"demo_knowledge"`
+			DemoKnowledge      bool   `json:"demo_knowledge"`
+			KnowledgeLibraryID string `json:"knowledge_library_id"`
 		}
 		if err := json.Unmarshal([]byte(*raw), &snapshot); err != nil {
 			return nil, err
 		}
 		state.preferences, state.demoKnowledge = snapshot.ResearchPreferences, snapshot.DemoKnowledge
+		state.knowledgeLibraryID = snapshot.KnowledgeLibraryID
 	}
 	if state.task.parentTaskID == nil {
 		return state, nil
@@ -186,6 +189,13 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 		}
 		state.sources = append(state.sources, sources...)
 	}
+	if state.knowledgeLibraryID != "" && (!state.task.requiresPlanReview || state.task.approvedPlan != nil) {
+		sources, err := e.retrievePrivateKnowledge(ctx, state.task.goal, state.knowledgeLibraryID)
+		if err != nil {
+			return nil, err
+		}
+		state.sources = append(state.sources, sources...)
+	}
 	initial := roundState{sources: state.sources}
 	if len(initial.sources) > 0 && !state.task.requiresPlanReview {
 		// Check uploaded evidence before planning any external collection.
@@ -220,6 +230,7 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 }
 
 const knowledgeStep = "tool-0-knowledge"
+const privateKnowledgeStep = "tool-0-private-knowledge"
 
 type knowledgeObservation struct {
 	Mode    string     `json:"mode"`
@@ -246,13 +257,17 @@ func (e execution) retrieveDemoKnowledge(ctx context.Context, goal string) ([]ev
 	if err != nil {
 		return nil, err
 	}
+	return decodeKnowledgeSources(value), nil
+}
+
+func decodeKnowledgeSources(value string) []evidence {
 	var observation knowledgeObservation
 	if json.Unmarshal([]byte(value), &observation) == nil {
-		return observation.Sources, nil
+		return observation.Sources
 	}
 	var sources []evidence
 	_ = json.Unmarshal([]byte(value), &sources)
-	return sources, nil
+	return sources
 }
 
 const planInstructions = `Return only a JSON object with one top-level key, "steps", containing 1–4 steps.
@@ -294,10 +309,15 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 	if err = e.setPhase(ctx, phase, kind, map[string]any{"plan_version": round + 1}); err != nil {
 		return nil, err
 	}
+	background := step.state.parentContext
+	if step.state.knowledgeLibraryID != "" {
+		// Planner inputs for public tools exclude gaps derived from private passages.
+		failures, background = "", ""
+	}
 	planText, err := e.checkpoint(ctx, fmt.Sprintf("plan-%d", round+1), func(ctx context.Context) (string, error) {
 		return e.generate(ctx, config, fmt.Sprintf(
 			"Create a technical research plan for this goal: %s. Search enabled: %t.\n%s",
-			t.goal+" Previous attempts: "+failures, os.Getenv("BRAVE_SEARCH_API_KEY") != "", instructions)+step.state.parentContext+sourcePreference(step.state.preferences))
+			t.goal+" Previous attempts: "+failures, os.Getenv("BRAVE_SEARCH_API_KEY") != "", instructions)+background+sourcePreference(step.state.preferences))
 	})
 	if err != nil {
 		return nil, err
@@ -307,7 +327,7 @@ func (e execution) planRound(ctx context.Context, step *researchRound) (*researc
 		// Repair once within this planning round; a new checkpoint means a
 		// distinct durable model attempt, with its own budget reservation.
 		planText, err = e.checkpoint(ctx, fmt.Sprintf("plan-%d-repair", round+1), func(ctx context.Context) (string, error) {
-			return e.generate(ctx, config, fmt.Sprintf("Repair this plan. Goal: %s. Search enabled: %t. Error: %s. Invalid plan: %s\n%s", t.goal, os.Getenv("BRAVE_SEARCH_API_KEY") != "", planErr.Error(), textutil.Clip(planText, 4000), instructions)+step.state.parentContext+sourcePreference(step.state.preferences))
+			return e.generate(ctx, config, fmt.Sprintf("Repair this plan. Goal: %s. Search enabled: %t. Error: %s. Invalid plan: %s\n%s", t.goal, os.Getenv("BRAVE_SEARCH_API_KEY") != "", planErr.Error(), textutil.Clip(planText, 4000), instructions)+background+sourcePreference(step.state.preferences))
 		})
 		if err != nil {
 			return nil, err
@@ -347,7 +367,7 @@ func previousRepositoryListings(sources []evidence) string {
 	var listings []string
 	seen := map[string]bool{}
 	for _, source := range sources {
-		if strings.HasPrefix(source.Title, "Repository directory ") && !seen[source.URL] {
+		if source.Type != "knowledge" && source.Type != "upload" && strings.HasPrefix(source.Title, "Repository directory ") && !seen[source.URL] {
 			seen[source.URL] = true
 			listings = append(listings, textutil.Clip(source.URL+"`n"+source.Excerpt, 2800))
 			if len(listings) == 2 {
@@ -536,7 +556,7 @@ func promptEvidence(sources []evidence, goal string, budget, limit int) []eviden
 	}
 	score := func(s evidence) int {
 		weight := 0
-		if s.Type == "upload" {
+		if s.Type == "upload" || s.Type == "knowledge" {
 			weight += 50
 		}
 		base := strings.Split(s.URL, "#")[0]

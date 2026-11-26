@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log"
+	"researchpilot/internal/knowledge"
 	taskservice "researchpilot/internal/task"
 	"sync"
 	"time"
@@ -42,6 +43,11 @@ func runWorker(ctx context.Context, deps WorkerComponents) error {
 	jobs.Go(func() {
 		runWorkerJob(ctx, "research schedules", 5*time.Second, 10*time.Second, func(ctx context.Context) error {
 			return taskservice.RunDueSchedules(ctx, store, time.Now())
+		})
+	})
+	jobs.Go(func() {
+		runWorkerJob(ctx, "knowledge indexing", time.Second, 10*time.Second, func(ctx context.Context) error {
+			return store.IndexNextKnowledgeVersion(ctx, knowledge.SplitDocument)
 		})
 	})
 	log.Printf("worker listening on %s", queue)

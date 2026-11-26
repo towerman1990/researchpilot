@@ -34,7 +34,7 @@ export function ReportEvidence({taskID, read, openSource}) {
               <Button type="link" className="report-evidence-source" onClick={() => {
                 void openSource('/api/v1/research/tasks/' + taskID + '/sources/' + source_id);
               }}>{title}</Button>
-              <Tag>{source_type === 'upload' ? '上传资料' : '公开来源'}</Tag>
+              <Tag>{({upload:'上传资料', knowledge:'私有知识库'})[source_type] || '公开来源'}</Tag>
             </li>
           ))}
         </ol> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="这份报告没有已归档的引用"/>}

@@ -12,7 +12,7 @@ import (
 )
 
 const TrialLimit = 10
-const GuestTrialLimit = 3
+const GuestTrialLimit = 5
 
 var ErrGuestTrialExhausted = errors.New("guest_trial_exhausted")
 

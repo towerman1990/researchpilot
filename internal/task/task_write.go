@@ -21,14 +21,15 @@ import (
 )
 
 var (
-	ErrInvalidTask         = errors.New("invalid_task_request")
-	ErrIdempotencyConflict = errors.New("idempotency_conflict")
-	ErrModelRevoked        = errors.New("model_configuration_revoked")
-	ErrTaskNotFound        = errors.New("task_not_found")
-	ErrTaskFinished        = errors.New("task_already_finished")
-	ErrPlanNotAwaiting     = errors.New("plan_not_awaiting_approval")
-	ErrInvalidPlan         = errors.New("invalid_plan")
-	errDuplicateRequest    = errors.New("duplicate request key")
+	ErrKnowledgeLibraryNotFound = errors.New("knowledge_library_not_found")
+	ErrInvalidTask              = errors.New("invalid_task_request")
+	ErrIdempotencyConflict      = errors.New("idempotency_conflict")
+	ErrModelRevoked             = errors.New("model_configuration_revoked")
+	ErrTaskNotFound             = errors.New("task_not_found")
+	ErrTaskFinished             = errors.New("task_already_finished")
+	ErrPlanNotAwaiting          = errors.New("plan_not_awaiting_approval")
+	ErrInvalidPlan              = errors.New("invalid_plan")
+	errDuplicateRequest         = errors.New("duplicate request key")
 )
 
 type TaskWriter interface {
@@ -41,10 +42,11 @@ type TaskWriter interface {
 type TaskActions struct{ Store TaskWriter }
 
 type SubmitOptions struct {
-	ReviewPlan      bool
-	ReviewCitations bool
-	DemoKnowledge   bool
-	GuestAddress    string
+	ReviewPlan         bool
+	ReviewCitations    bool
+	DemoKnowledge      bool
+	KnowledgeLibraryID string
+	GuestAddress       string
 }
 
 func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID string, options SubmitOptions, attachments ...Material) (model.TaskSnapshot, error) {
@@ -69,6 +71,17 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 	}
 	if options.DemoKnowledge {
 		rd = sha256.Sum256(append([]byte{0xfb}, rd[:]...))
+	}
+	libraryID := options.KnowledgeLibraryID
+	if libraryID != "" {
+		if _, err := hex.DecodeString(libraryID); len(libraryID) != 32 || err != nil {
+			return model.TaskSnapshot{}, ErrInvalidTask
+		}
+		if options.GuestAddress != "" {
+			return model.TaskSnapshot{}, ErrKnowledgeLibraryNotFound
+		}
+		libraryID = strings.ToLower(libraryID)
+		rd = sha256.Sum256(append(append([]byte{0xfa}, rd[:]...), libraryID...))
 	}
 	files, err := normalizeMaterials(attachments)
 	if err != nil {
@@ -127,6 +140,13 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 				return err
 			}
 		}
+		if libraryID != "" {
+			if err := tx.SelectKnowledgeLibrary(tenant, id, libraryID); errors.Is(err, sql.ErrNoRows) {
+				return ErrKnowledgeLibraryNotFound
+			} else if err != nil {
+				return err
+			}
+		}
 		version, err := tx.ActiveModelVersion(tenant)
 		if err != nil {
 			return err
@@ -141,7 +161,7 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 				return err
 			}
 		}
-		if (options.ReviewPlan || options.ReviewCitations || options.DemoKnowledge) && version == 0 {
+		if (options.ReviewPlan || options.ReviewCitations || options.DemoKnowledge || libraryID != "") && version == 0 {
 			return service.ErrModelNotConfigured
 		}
 		if version > 0 {

@@ -1,6 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import {Alert, Button, Card, Empty, Segmented, Skeleton, Space, Tag} from 'antd';
 import './research-evaluation.css';
+import {RetrievalEvaluation} from './RetrievalEvaluation.jsx';
 
 const format = new Intl.NumberFormat('zh-CN');
 const dateTime = new Intl.DateTimeFormat('zh-CN', {dateStyle:'short', timeStyle:'short'});
@@ -38,6 +39,7 @@ export function ResearchEvaluation({read, openTask}) {
       : current.error ? <Alert type="error" showIcon message="暂时无法读取研究评估" description="请刷新后重试。"/>
       : current.data.summary.finished_tasks === 0 ? <Card><Empty description="此期间暂无已结束的真实研究"/></Card>
       : <EvaluationResults {...current.data} openTask={openTask}/>}
+    <RetrievalEvaluation/>
   </section>;
 }
 

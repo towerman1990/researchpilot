@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"researchpilot/internal/knowledge"
 	"researchpilot/internal/repository/model"
 	taskservice "researchpilot/internal/task"
 	researchtools "researchpilot/internal/tools/research"
@@ -69,6 +71,10 @@ func TestDemoKnowledgeIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, demoKnowledge: true})
 }
 
+func TestPrivateKnowledgeIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, privateKnowledge: true})
+}
+
 func TestCompactSynthesisIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, compactSynthesis: true})
 }
@@ -88,7 +94,7 @@ func TestCitationReviewIntegration(t *testing.T) {
 }
 
 type researchFixtureOptions struct {
-	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch, demoKnowledge bool
+	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch, demoKnowledge, privateKnowledge bool
 }
 
 func researchFixture(t *testing.T, options researchFixtureOptions) {
@@ -113,12 +119,44 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	if strings.Contains(string(encrypted), "test-only-api-key") {
 		t.Fatal("API key stored in plaintext")
 	}
-	if review || options.reviewCitations || options.demoKnowledge {
+	store := executionStore(t, db)
+	var libraryID string
+	if options.privateKnowledge {
+		library, err := store.CreateKnowledgeLibrary(t.Context(), d.Tenant, "Internal handbook")
+		if err != nil {
+			t.Fatal(err)
+		}
+		libraryID = library.ID
+		version, err := store.AddKnowledgeVersion(t.Context(), d.Tenant, libraryID, "runtime.md", "PrivateCoral is documented in this first version.")
+		if err != nil || version.Status != "QUEUED" || version.Revision != 1 {
+			t.Fatalf("first version: %+v %v", version, err)
+		}
+		if chunks, err := store.KnowledgeChunks(t.Context(), d.Tenant, libraryID); err != nil || len(chunks) != 0 {
+			t.Fatalf("unindexed document was searchable: %v %v", chunks, err)
+		}
+		if err := store.IndexNextKnowledgeVersion(t.Context(), knowledge.SplitDocument); err != nil {
+			t.Fatal(err)
+		}
+		foreign := newTestTask(t, db)
+		if _, err := store.KnowledgeVersions(t.Context(), foreign.Tenant, libraryID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign tenant read knowledge metadata: %v", err)
+		}
+		if _, err := store.AddKnowledgeVersion(t.Context(), foreign.Tenant, libraryID, "runtime.md", "foreign write"); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign tenant uploaded into private library: %v", err)
+		}
+		if _, err := (taskservice.TaskActions{Store: store}).Submit(t.Context(), foreign.Tenant, "foreign-private-knowledge", "PrivateCoral", "", taskservice.SubmitOptions{KnowledgeLibraryID: libraryID}); !errors.Is(err, taskservice.ErrKnowledgeLibraryNotFound) {
+			t.Fatalf("foreign tenant selected a private library: %v", err)
+		}
+	}
+	if review || options.reviewCitations || options.demoKnowledge || options.privateKnowledge {
 		actions := taskservice.TaskActions{Store: executionStore(t, db)}
-		submit := taskservice.SubmitOptions{ReviewPlan: review, ReviewCitations: options.reviewCitations, DemoKnowledge: options.demoKnowledge}
+		submit := taskservice.SubmitOptions{ReviewPlan: review, ReviewCitations: options.reviewCitations, DemoKnowledge: options.demoKnowledge, KnowledgeLibraryID: libraryID}
 		goal := "Reviewable research goal"
 		if options.demoKnowledge {
 			goal = "HttpClient DNS PooledConnectionLifetime"
+		}
+		if options.privateKnowledge {
+			goal = "Explain PrivateCoral"
 		}
 		created, err := actions.Submit(t.Context(), d.Tenant, "plan-review-test", goal, "", submit)
 		if err != nil {
@@ -267,6 +305,35 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 		var count int
 		if err := db.QueryRow("SELECT COUNT(*) FROM task_events WHERE task_id=? AND JSON_UNQUOTE(JSON_EXTRACT(payload,'$.retrieval_mode'))=? AND JSON_EXTRACT(payload,'$.retrieval_hits')>0", d.Task, expectedMode).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("expected one successful %s retrieval event, got %d: %v", expectedMode, count, err)
+		}
+	}
+	if options.privateKnowledge {
+		expectedUsage = 200
+		if fetchedURL != "" {
+			t.Fatalf("private evidence was sufficient, but public retrieval ran: %s", fetchedURL)
+		}
+		refs, err := worker.store.ReadReportEvidence(t.Context(), d.Tenant, d.Task)
+		if err != nil || len(refs.Citations) != 1 || refs.Citations[0].Type != "knowledge" || !strings.Contains(refs.Citations[0].Title, "第 1 版") {
+			t.Fatalf("missing versioned private citation: %+v %v", refs, err)
+		}
+		version, err := store.AddKnowledgeVersion(t.Context(), d.Tenant, libraryID, "runtime.md", "PrivateCoral is documented in this second version.")
+		if err != nil || version.Revision != 2 {
+			t.Fatalf("second version: %+v %v", version, err)
+		}
+		if err := store.IndexNextKnowledgeVersion(t.Context(), knowledge.SplitDocument); err != nil {
+			t.Fatal(err)
+		}
+		chunks, err := store.KnowledgeChunks(t.Context(), d.Tenant, libraryID)
+		if err != nil || len(chunks) != 1 || chunks[0].Revision != 2 {
+			t.Fatalf("current retrieval should use second version: %+v %v", chunks, err)
+		}
+		original, err := store.ReadSource(t.Context(), d.Tenant, d.Task, refs.Citations[0].ID)
+		if err != nil || !strings.Contains(original.Excerpt, "first version") || original.URL != taskSourceURL(d.Task, refs.Citations[0].ID) {
+			t.Fatalf("old report lost its original excerpt: %+v %v", original, err)
+		}
+		foreign := newTestTask(t, db)
+		if _, err := store.ReadSource(t.Context(), foreign.Tenant, d.Task, refs.Citations[0].ID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("foreign tenant read a private report source: %v", err)
 		}
 	}
 	if options.compactSynthesis {

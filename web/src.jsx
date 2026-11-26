@@ -26,6 +26,9 @@ const errors = {
   invalid_plan:'计划内容不符合要求，请检查每一步的资料来源。',
   invalid_plan_schema:'没能生成可审批的计划，请调整目标后重试。',
   plan_not_awaiting_approval:'计划状态已变化，请查看最新任务进度。',
+  invalid_knowledge_name:'请输入 1 到 120 字的资料库名称。',
+  knowledge_library_not_found:'找不到这套私有知识库。',
+  knowledge_storage_limit:'已达资料库数量或文档版本上限。',
   model_not_configured:'请配置个人模型或使用平台试用。',
   report_not_ready:'请从已生成报告的任务发起追问。',
   task_not_found:'找不到这项研究任务。',
@@ -41,7 +44,7 @@ const errors = {
   model_http_403:'模型服务拒绝访问，请检查账号权限。',
   model_http_429:'模型服务限流，请稍后重试。',
   rate_limited:'请求过于频繁，请稍后重试。',
-  guest_trial_exhausted:'今日 3 次访客试用已用完，请登录或注册后继续。',
+  guest_trial_exhausted:'今日访客试用已用完，请登录或注册后继续。',
   trial_exhausted:'免费试用次数已用完，请在模型设置中配置自己的 API Key。',
   trial_unavailable:'免费试用服务暂不可用，请稍后重试或配置自己的 API Key。',
   model_configuration_revoked:'模型密钥已撤销，请重新配置。',
@@ -317,17 +320,18 @@ function App() {
       }
     }
 
-    async function connect() {
+    async function connect(fromSnapshot = false) {
       const ticket = ++generation;
       stream?.close();
       stream = null;
       const current = await refresh(ticket);
       if (!isCurrent(ticket) || !current) return;
-      if (terminal(current.status)) {
+      if (fromSnapshot && terminal(current.status)) {
         setConnection('');
         return;
       }
-      const source = new EventSource(endpoint + '/events?after=' + encodeURIComponent(current.event_seq));
+      const cursor = fromSnapshot ? current.event_seq : '0';
+      const source = new EventSource(endpoint + '/events?after=' + encodeURIComponent(cursor));
       stream = source;
       const ownsStream = () => isCurrent(ticket) && stream === source;
       source.onopen = () => { if (ownsStream()) setConnection('实时连接已建立'); };
@@ -347,9 +351,9 @@ function App() {
         setEvents([]);
         setTask(null);
         setConnection('正在恢复任务快照');
-        void connect();
+        void connect(true);
       });
-      for (const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','plan_updated','replan_started','citation_review_started','citation_review_completed','report_ready']) {
+      for (const type of ['task_status','step_started','tool_started','tool_finished','usage_updated','coverage_updated','checkpoint_reused','plan_updated','replan_started','citation_review_started','citation_review_completed','report_ready']) {
         source.addEventListener(type, event => {
           if (!ownsStream()) return;
           const value = JSON.parse(event.data);
@@ -395,17 +399,17 @@ function App() {
     finally { setAuthBusy(false); }
   }
 
-  async function submit(event, reviewPlan, attachments, reviewCitations, demoKnowledge) {
+  async function submit(event, reviewPlan, attachments, reviewCitations, demoKnowledge, libraryID) {
     event.preventDefault();
-    await submitTask(goal, '', reviewPlan, attachments, reviewCitations, demoKnowledge);
+    await submitTask(goal, '', reviewPlan, attachments, reviewCitations, demoKnowledge, libraryID);
   }
 
-  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false, demoKnowledge = false) {
+  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false, demoKnowledge = false, libraryID = '') {
     setBusy(true); setError('');
     const value = question.trim();
     const attachmentKey = JSON.stringify(attachments);
-    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey || requestKey.current?.demoKnowledge !== demoKnowledge) {
-      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,demoKnowledge,attachmentKey,id:newRequestID()};
+    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey || requestKey.current?.demoKnowledge !== demoKnowledge || requestKey.current?.libraryID !== libraryID) {
+      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,demoKnowledge,libraryID,attachmentKey,id:newRequestID()};
     }
     const request = requestKey.current;
     const scope = sessionScope.current;
@@ -418,6 +422,7 @@ function App() {
       if (reviewPlan) payload.review_plan = true;
       if (reviewCitations) payload.review_citations = true;
       if (demoKnowledge) payload.demo_knowledge = true;
+      if (libraryID) payload.knowledge_library_id = libraryID;
       if (attachments.length) payload.attachments = attachments;
       const created = await api(path,payload,{'Idempotency-Key':request.id});
       if (sessionScope.current !== scope) return;

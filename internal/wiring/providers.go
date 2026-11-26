@@ -87,11 +87,12 @@ func provideTasks(tasks taskservice.Tasks, actions taskservice.TaskActions, stre
 func provideWeb(cfg appConfig) handler.Web { return handler.Web{Root: cfg.WebDir} }
 
 type apiComponents struct {
-	Health handler.Health
-	Auth   handler.Auth
-	Models handler.Models
-	Tasks  handler.Tasks
-	Web    handler.Web
+	Health    handler.Health
+	Auth      handler.Auth
+	Models    handler.Models
+	Tasks     handler.Tasks
+	Web       handler.Web
+	Knowledge handler.Knowledge
 }
 
 func (a apiComponents) register(r route.IRouter) {
@@ -99,10 +100,11 @@ func (a apiComponents) register(r route.IRouter) {
 	a.Auth.RegisterRoutes(r)
 	a.Models.RegisterRoutes(r)
 	a.Tasks.RegisterRoutes(r)
+	a.Knowledge.RegisterRoutes(r)
 	a.Web.RegisterRoutes(r)
 }
-func provideAPI(health handler.Health, auth handler.Auth, models handler.Models, tasks handler.Tasks, web handler.Web) apiComponents {
-	return apiComponents{health, auth, models, tasks, web}
+func provideAPI(health handler.Health, auth handler.Auth, models handler.Models, tasks handler.Tasks, web handler.Web, store *repository.Store) apiComponents {
+	return apiComponents{health, auth, models, tasks, web, handler.Knowledge{Store: store, Auth: auth}}
 }
 func provideToolRegistry(client toolsClient) *toolcontract.Registry[[]dbmodel.Source] {
 	return researchtools.NewRegistry(client.Client)

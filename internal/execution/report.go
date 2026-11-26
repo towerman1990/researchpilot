@@ -72,7 +72,7 @@ func renderReport(draft reportDraft, sources []evidence) (string, []evidence, er
 	}
 	body.WriteString("\n## 参考资料\n\n")
 	for i, source := range used {
-		if source.Type == "upload" {
+		if source.Type == "upload" || source.Type == "knowledge" {
 			if !uploadedSourcePath.MatchString(source.URL) || !strings.HasSuffix(source.URL, "/"+source.ID) {
 				return "", nil, errors.New("invalid_source_url")
 			}

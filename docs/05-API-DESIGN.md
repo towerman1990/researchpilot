@@ -4,7 +4,7 @@
 |---|---|
 | POST /auth/register、/auth/login、/auth/refresh、/auth/logout | 注册登录、刷新轮换、撤销，Web 用安全 Cookie，桌面采用平台会话适配。 |
 | GET / POST /conversations | 游标列表或创建会话。P0 用于任务归组。 |
-| POST /research/tasks | 请求提供 `goal` 以及可选的 `parent_task_id`、`review_plan`、`review_citations`、`demo_knowledge` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同请求内容时返回 409。 |
+| POST /research/tasks | 请求提供 `goal` 以及可选的 `parent_task_id`、`review_plan`、`review_citations`、`demo_knowledge`、`knowledge_library_id` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同请求内容时返回 409。 |
 | GET /research/tasks | 返回当前租户的任务数组，每页最多 50 条，按创建时间和任务 ID 降序排列。有更早的记录时，响应头 `X-Next-Cursor` 提供下一页的 `before` 值。 |
 | GET /research/tasks/{id} | 获取任务快照，包括状态、阶段和最新事件序号。 |
 | GET /research/tasks/{id}/events | SSE，按 Last-Event-ID 回放，也接受 after 用于初始连接。 |
@@ -40,6 +40,8 @@
 ## 上传研究资料
 
 将 `demo_knowledge` 设为 `true` 可为当前任务启用公开知识库检索，需有个人模型或平台试用模型。该选项参与请求幂等校验，命中内容归档为任务证据。与 `review_plan` 同时启用时，在计划批准后检索。
+
+已登录用户可通过 `GET/POST /api/v1/knowledge/libraries` 列出或创建资料库（创建请求含 `name`），并通过 `GET/POST /api/v1/knowledge/libraries/{id}/documents` 查看文档版本或上传 `name`、`content`。上传返回 202 和 `QUEUED` 状态，索引完成后状态变为 `READY`。创建研究任务时传入 `knowledge_library_id` 可选用当前账号的资料库；该字段参与幂等校验。访问他人资料库返回 404。
 
 创建任务时可传入 `attachments` 数组，每项包含 `name` 与 UTF-8 `content`。支持 TXT 与 Markdown，限两份，每份最多 24 KiB。非法输入返回 422。资料与任务在同一事务中保存，并通过当前任务的授权来源接口读取。资料摘录作为模型证据，报告可引用原文件名。
 

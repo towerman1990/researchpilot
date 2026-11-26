@@ -21,7 +21,16 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 	saved, err := e.store.ReadCheckpoint(ctx, e.Tenant, e.Task, key)
 	if err == nil {
 		var value string
-		err = json.Unmarshal([]byte(saved), &value)
+		if err := json.Unmarshal([]byte(saved), &value); err != nil {
+			return "", err
+		}
+		if e.Generation > 1 {
+			err = e.mutate(ctx, func(tx *repository.ExecutionTx, locked taskRow) error {
+				return eventUpdate(ctx, tx, e.delivery, locked, "checkpoint_reused", map[string]any{
+					"step_key": key, "generation": e.Generation,
+				})
+			})
+		}
 		return value, err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -72,12 +81,12 @@ func (e execution) checkpoint(ctx context.Context, key string, run func(context.
 			return err
 		}
 		payload := map[string]any{"step_key": key, "tool_call_id": key, "attempt_no": attempt, "status": status, "summary": summary}
-		if key == knowledgeStep && status == "SUCCEEDED" {
+		if (key == knowledgeStep || key == privateKnowledgeStep) && status == "SUCCEEDED" {
 			var observation knowledgeObservation
 			if json.Unmarshal([]byte(value), &observation) == nil && observation.Mode != "" {
 				payload["retrieval_mode"] = observation.Mode
 				payload["retrieval_hits"] = len(observation.Sources)
-				payload["summary"] = fmt.Sprintf("公开知识库：%s，命中 %d 条", observation.Mode, len(observation.Sources))
+				payload["summary"] = fmt.Sprintf("知识库检索：%s，命中 %d 条", observation.Mode, len(observation.Sources))
 			}
 		}
 		return eventUpdate(ctx, tx, e.delivery, locked, "tool_finished", payload)
@@ -89,7 +98,7 @@ func prepareCheckpointValue(ctx context.Context, tx *repository.ExecutionTx, d d
 	if !strings.HasPrefix(key, "tool-") {
 		return value, nil
 	}
-	if key == knowledgeStep {
+	if key == knowledgeStep || key == privateKnowledgeStep {
 		var observation knowledgeObservation
 		if json.Unmarshal([]byte(value), &observation) == nil && observation.Mode != "" {
 			if err := storeSources(ctx, tx, d, observation.Sources); err != nil {
@@ -123,10 +132,16 @@ func storeSources(ctx context.Context, tx *repository.ExecutionTx, d delivery, s
 		existing, err := tx.SourceByFingerprint(ctx, d.Tenant, d.Task, fingerprint)
 		if err == nil {
 			source.ID = existing
+			if source.Type == "knowledge" {
+				source.URL = taskSourceURL(d.Task, source.ID)
+			}
 			continue
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if source.Type == "knowledge" {
+			source.URL = taskSourceURL(d.Task, source.ID)
 		}
 		err = tx.InsertSource(ctx, d.Tenant, d.Task, *source, fingerprint)
 		if err != nil {

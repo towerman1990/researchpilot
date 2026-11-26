@@ -1,0 +1,434 @@
+{
+  "corpus": "public-tech-v1",
+  "query_set": "demo-queries-v1",
+  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "strategies": [
+    {
+      "mode": "keyword",
+      "recall_at_1": 0.8333333333333334,
+      "recall_at_3": 1,
+      "recall_at_5": 1,
+      "mrr_at_5": 1,
+      "uncovered_with_results": 0,
+      "p95_ms": 0.532,
+      "cases": [
+        {
+          "id": "dns-zh",
+          "query": "HttpClient 怎样更新 DNS 解析缓存？",
+          "relevant_ids": [
+            "httpclient-dns"
+          ],
+          "result_ids": [
+            "httpclient-dns",
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "ms": 0
+        },
+        {
+          "id": "dns-en",
+          "query": "How does PooledConnectionLifetime help a long-lived client pick up DNS changes?",
+          "relevant_ids": [
+            "httpclient-dns",
+            "httpclient-factory"
+          ],
+          "result_ids": [
+            "httpclient-dns",
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "ms": 0.532
+        },
+        {
+          "id": "pool-zh",
+          "query": "每次请求都创建和释放 HttpClient 为什么会导致端口耗尽？",
+          "relevant_ids": [
+            "httpclient-pooling"
+          ],
+          "result_ids": [
+            "httpclient-pooling",
+            "httpclient-dns",
+            "httpclient-factory"
+          ],
+          "ms": 0
+        },
+        {
+          "id": "pool-en",
+          "query": "Does a new HttpClient instance share an existing connection pool?",
+          "relevant_ids": [
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "result_ids": [
+            "httpclient-pooling",
+            "httpclient-factory",
+            "httpclient-dns",
+            "aspnet-routing"
+          ],
+          "ms": 0
+        },
+        {
+          "id": "factory-zh",
+          "query": "IHttpClientFactory 如何通过复用处理器来管理连接？",
+          "relevant_ids": [
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "result_ids": [
+            "httpclient-factory",
+            "httpclient-pooling",
+            "httpclient-dns"
+          ],
+          "ms": 0
+        },
+        {
+          "id": "routing-zh",
+          "query": "ASP.NET Core 怎样给同一组最小 API 路由统一加授权？",
+          "relevant_ids": [
+            "aspnet-routing"
+          ],
+          "result_ids": [
+            "aspnet-routing",
+            "httpclient-pooling",
+            "httpclient-dns",
+            "httpclient-factory"
+          ],
+          "ms": 0
+        },
+        {
+          "id": "routing-en",
+          "query": "Can MapGroup apply shared metadata to a group of endpoints?",
+          "relevant_ids": [
+            "aspnet-routing"
+          ],
+          "result_ids": [
+            "aspnet-routing"
+          ],
+          "ms": 0
+        },
+        {
+          "id": "cancel-zh",
+          "query": "Go 父 context 被取消后，子 context 的 Done 通道会怎样？",
+          "relevant_ids": [
+            "go-context"
+          ],
+          "result_ids": [
+            "go-context"
+          ],
+          "ms": 0.5292
+        },
+        {
+          "id": "cancel-en",
+          "query": "What does calling the cancel function returned by WithCancel do?",
+          "relevant_ids": [
+            "go-context"
+          ],
+          "result_ids": [
+            "go-context",
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "ms": 0
+        },
+        {
+          "id": "uncovered-crypto",
+          "query": "How does RSA-OAEP padding work?",
+          "relevant_ids": [],
+          "result_ids": [],
+          "ms": 0
+        },
+        {
+          "id": "uncovered-index",
+          "query": "为什么 MySQL 联合索引遵守最左前缀规则？",
+          "relevant_ids": [],
+          "result_ids": [],
+          "ms": 0
+        }
+      ]
+    },
+    {
+      "mode": "vector",
+      "recall_at_1": 0.8333333333333334,
+      "recall_at_3": 0.9444444444444444,
+      "recall_at_5": 0.9444444444444444,
+      "mrr_at_5": 1,
+      "uncovered_with_results": 0,
+      "p95_ms": 13.9156,
+      "cases": [
+        {
+          "id": "dns-zh",
+          "query": "HttpClient 怎样更新 DNS 解析缓存？",
+          "relevant_ids": [
+            "httpclient-dns"
+          ],
+          "result_ids": [
+            "httpclient-dns",
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "ms": 11.6142
+        },
+        {
+          "id": "dns-en",
+          "query": "How does PooledConnectionLifetime help a long-lived client pick up DNS changes?",
+          "relevant_ids": [
+            "httpclient-dns",
+            "httpclient-factory"
+          ],
+          "result_ids": [
+            "httpclient-dns",
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "ms": 11.0537
+        },
+        {
+          "id": "pool-zh",
+          "query": "每次请求都创建和释放 HttpClient 为什么会导致端口耗尽？",
+          "relevant_ids": [
+            "httpclient-pooling"
+          ],
+          "result_ids": [
+            "httpclient-pooling",
+            "httpclient-dns",
+            "httpclient-factory"
+          ],
+          "ms": 13.9156
+        },
+        {
+          "id": "pool-en",
+          "query": "Does a new HttpClient instance share an existing connection pool?",
+          "relevant_ids": [
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "result_ids": [
+            "httpclient-pooling",
+            "httpclient-factory",
+            "httpclient-dns"
+          ],
+          "ms": 10.2551
+        },
+        {
+          "id": "factory-zh",
+          "query": "IHttpClientFactory 如何通过复用处理器来管理连接？",
+          "relevant_ids": [
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "result_ids": [
+            "httpclient-pooling"
+          ],
+          "ms": 11.5781
+        },
+        {
+          "id": "routing-zh",
+          "query": "ASP.NET Core 怎样给同一组最小 API 路由统一加授权？",
+          "relevant_ids": [
+            "aspnet-routing"
+          ],
+          "result_ids": [
+            "aspnet-routing",
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "ms": 10.8536
+        },
+        {
+          "id": "routing-en",
+          "query": "Can MapGroup apply shared metadata to a group of endpoints?",
+          "relevant_ids": [
+            "aspnet-routing"
+          ],
+          "result_ids": [
+            "aspnet-routing",
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "ms": 10.3724
+        },
+        {
+          "id": "cancel-zh",
+          "query": "Go 父 context 被取消后，子 context 的 Done 通道会怎样？",
+          "relevant_ids": [
+            "go-context"
+          ],
+          "result_ids": [
+            "go-context"
+          ],
+          "ms": 10.303
+        },
+        {
+          "id": "cancel-en",
+          "query": "What does calling the cancel function returned by WithCancel do?",
+          "relevant_ids": [
+            "go-context"
+          ],
+          "result_ids": [
+            "go-context"
+          ],
+          "ms": 9.8554
+        },
+        {
+          "id": "uncovered-crypto",
+          "query": "How does RSA-OAEP padding work?",
+          "relevant_ids": [],
+          "result_ids": [],
+          "ms": 10.4674
+        },
+        {
+          "id": "uncovered-index",
+          "query": "为什么 MySQL 联合索引遵守最左前缀规则？",
+          "relevant_ids": [],
+          "result_ids": [],
+          "ms": 11.7276
+        }
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "recall_at_1": 0.8333333333333334,
+      "recall_at_3": 1,
+      "recall_at_5": 1,
+      "mrr_at_5": 1,
+      "uncovered_with_results": 0,
+      "p95_ms": 12.6505,
+      "cases": [
+        {
+          "id": "dns-zh",
+          "query": "HttpClient 怎样更新 DNS 解析缓存？",
+          "relevant_ids": [
+            "httpclient-dns"
+          ],
+          "result_ids": [
+            "httpclient-dns",
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "ms": 9.8552
+        },
+        {
+          "id": "dns-en",
+          "query": "How does PooledConnectionLifetime help a long-lived client pick up DNS changes?",
+          "relevant_ids": [
+            "httpclient-dns",
+            "httpclient-factory"
+          ],
+          "result_ids": [
+            "httpclient-dns",
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "ms": 11.5889
+        },
+        {
+          "id": "pool-zh",
+          "query": "每次请求都创建和释放 HttpClient 为什么会导致端口耗尽？",
+          "relevant_ids": [
+            "httpclient-pooling"
+          ],
+          "result_ids": [
+            "httpclient-pooling",
+            "httpclient-dns",
+            "httpclient-factory"
+          ],
+          "ms": 12.6505
+        },
+        {
+          "id": "pool-en",
+          "query": "Does a new HttpClient instance share an existing connection pool?",
+          "relevant_ids": [
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "result_ids": [
+            "httpclient-pooling",
+            "httpclient-factory",
+            "httpclient-dns",
+            "aspnet-routing"
+          ],
+          "ms": 10.417
+        },
+        {
+          "id": "factory-zh",
+          "query": "IHttpClientFactory 如何通过复用处理器来管理连接？",
+          "relevant_ids": [
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "result_ids": [
+            "httpclient-pooling",
+            "httpclient-factory",
+            "httpclient-dns"
+          ],
+          "ms": 11.5268
+        },
+        {
+          "id": "routing-zh",
+          "query": "ASP.NET Core 怎样给同一组最小 API 路由统一加授权？",
+          "relevant_ids": [
+            "aspnet-routing"
+          ],
+          "result_ids": [
+            "aspnet-routing",
+            "httpclient-pooling",
+            "httpclient-factory",
+            "httpclient-dns"
+          ],
+          "ms": 10.6085
+        },
+        {
+          "id": "routing-en",
+          "query": "Can MapGroup apply shared metadata to a group of endpoints?",
+          "relevant_ids": [
+            "aspnet-routing"
+          ],
+          "result_ids": [
+            "aspnet-routing",
+            "httpclient-factory",
+            "httpclient-pooling"
+          ],
+          "ms": 11.302
+        },
+        {
+          "id": "cancel-zh",
+          "query": "Go 父 context 被取消后，子 context 的 Done 通道会怎样？",
+          "relevant_ids": [
+            "go-context"
+          ],
+          "result_ids": [
+            "go-context"
+          ],
+          "ms": 11.0575
+        },
+        {
+          "id": "cancel-en",
+          "query": "What does calling the cancel function returned by WithCancel do?",
+          "relevant_ids": [
+            "go-context"
+          ],
+          "result_ids": [
+            "go-context",
+            "httpclient-pooling",
+            "httpclient-factory"
+          ],
+          "ms": 12.2026
+        },
+        {
+          "id": "uncovered-crypto",
+          "query": "How does RSA-OAEP padding work?",
+          "relevant_ids": [],
+          "result_ids": [],
+          "ms": 9.8858
+        },
+        {
+          "id": "uncovered-index",
+          "query": "为什么 MySQL 联合索引遵守最左前缀规则？",
+          "relevant_ids": [],
+          "result_ids": [],
+          "ms": 10.1756
+        }
+      ]
+    }
+  ]
+}

@@ -106,7 +106,10 @@ func (e execution) collectPlanStep(ctx context.Context, round *researchRound, st
 				return `{"error":"dependency_failed"}`, nil
 			}
 		}
-		goal := round.state.task.goal + " " + step.Question + " " + round.failures
+		goal := round.state.task.goal + " " + step.Question
+		if round.state.knowledgeLibraryID == "" {
+			goal += " " + round.failures
+		}
 		collected, err := e.registry.Execute(researchtools.WithEvidenceGoal(ctx, goal), step.Input)
 		if err != nil {
 			raw, _ := json.Marshal(map[string]string{"error": err.Error()})

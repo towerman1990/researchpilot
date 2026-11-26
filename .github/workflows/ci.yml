@@ -91,7 +91,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm --prefix web ci
-      - run: node --test web/events.test.mjs
+      - run: node --test web/events.test.mjs web/reportComparison.test.mjs web/retrievalEvaluation.test.mjs
       - run: npm --prefix web run build
 
   smoke:
