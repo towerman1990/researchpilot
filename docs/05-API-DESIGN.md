@@ -80,3 +80,7 @@
 事件采用 id = task 内 seq，event 为 task_status、plan_updated、tool_finished、report_ready 等，data 含 schema_version、task_id、seq、timestamp 与脱敏 payload。客户端先读快照再以其 seq 建流，按 seq 去重。服务端从 MySQL 读所有 seq 大于游标的事件并持续追尾，Redis 仅用作唤醒并补轮询以覆盖遗漏。游标过期发送 reset 并关闭，客户端重新读取快照后订阅。建议每 15 秒心跳，禁反代缓冲，配置读超时并逐次刷新输出。撤销后在下一轮校验或连接有效期结束时关闭流。
 
 Web 使用同源会话 Cookie（Secure、HttpOnly、合适 SameSite），写操作验证 CSRF 与 Origin。桌面用系统浏览器和一次性绑定的登录回调（PKCE 与 state），短期访问令牌驻内存，刷新凭证存系统凭证库。桌面用可附 Authorization 的 fetch 流或等效受限原生桥，回放规则一致。配置明确允许的桌面来源，使用 HTTPS。令牌不上 URL，桌面壳限制外部导航，外链经系统浏览器打开。
+
+## 公开使用统计
+
+`GET /site/usage` 无需登录，返回 `day`、`today_users`、`today_uses`、`total_users` 和 `total_uses`。日期按北京时间计算。成功创建的交互研究和追问计次，登录按账号、访客按 IP 摘要去重。同一请求的幂等重放、后台重试、取消操作及定时任务的自动触发不增加统计。人数为该统计周期内账号数与访客 IP 数之和，同一人登录前后可能分别计入。数据从迁移 021 启用后的新任务开始累计，历史访客 IP 无法补算。

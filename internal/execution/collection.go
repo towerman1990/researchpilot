@@ -125,5 +125,6 @@ func (e execution) collectPlanStep(ctx context.Context, round *researchRound, st
 	if json.Unmarshal([]byte(saved), &sources) == nil && len(sources) > 0 {
 		return collectedStep{sources: sources}, nil
 	}
-	return collectedStep{failure: textutil.Clip(saved, 256)}, nil
+	input, _ := json.Marshal(step.Input)
+	return collectedStep{failure: "Attempted " + textutil.Clip(string(input), 1000) + " returned " + textutil.Clip(saved, 256)}, nil
 }

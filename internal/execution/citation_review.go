@@ -14,7 +14,7 @@ var errCitationReviewInvalid = errors.New("citation_review_invalid")
 var errCitationReviewUnsupported = errors.New("citation_review_unsupported")
 
 func (e execution) reviewResearch(ctx context.Context, state *researchState) (*researchState, error) {
-	if !state.task.reviewCitations && !state.multiAgent {
+	if !state.task.reviewCitations && !state.multiAgent && !state.coverageIncomplete {
 		return state, nil
 	}
 	if err := e.setPhase(ctx, "synthesizing", "citation_review_started", map[string]int{"findings": len(state.draft.Findings)}); err != nil {

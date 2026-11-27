@@ -24,6 +24,7 @@ type Tasks struct {
 }
 
 func (h Tasks) RegisterRoutes(r route.IRouter) {
+	r.GET("/api/v1/site/usage", h.Auth.apiHeaders, h.siteUsage)
 	g := r.Group("/api/v1/research/tasks", h.Auth.apiHeaders, h.Auth.requireTaskSession)
 	g.GET("", h.list)
 	r.GET("/api/v1/research/preferences", h.Auth.apiHeaders, h.Auth.requireSession, h.getPreferences)
@@ -49,6 +50,18 @@ func (h Tasks) RegisterRoutes(r route.IRouter) {
 	writes.POST("/:id/cancel", h.cancel)
 	writes.POST("/:id/plan/approve", h.approvePlan)
 	writes.PUT("/:id/report/feedback", h.saveReportFeedback)
+}
+
+func (h Tasks) siteUsage(ctx context.Context, c *app.RequestContext) {
+	if !h.Auth.allow(ctx, c, "site_usage", clientAddress(ctx, c), 60) {
+		return
+	}
+	stats, err := h.Service.Store.SiteUsage(ctx, time.Now())
+	if err != nil {
+		internalError(c, err)
+		return
+	}
+	c.JSON(200, stats)
 }
 
 func (h Tasks) getOverview(ctx context.Context, c *app.RequestContext) {

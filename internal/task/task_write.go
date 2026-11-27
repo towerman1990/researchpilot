@@ -200,6 +200,9 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		} else if err != nil {
 			return err
 		}
+		if err := tx.RecordSiteResearchUse(id, tenant, options.GuestAddress); err != nil {
+			return err
+		}
 		return enqueueNewTask(tx, tenant, id)
 	})
 	if errors.Is(err, errDuplicateRequest) {

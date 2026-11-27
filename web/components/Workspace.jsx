@@ -10,6 +10,7 @@ import {ReportComparison} from './ReportComparison.jsx';
 import {TaskOverview} from './TaskOverview.jsx';
 import {KnowledgeView, LibrarySelect} from './KnowledgeView.jsx';
 import {UsageView} from './UsageView.jsx';
+import {SiteUsage} from './SiteUsage.jsx';
 import {terminal} from '../events.js';
 import brandIcon from '../researchpilot-icon.png';
 
@@ -414,6 +415,7 @@ export function Workspace(props) {
     <main className="main-area">
       <div className="topbar"><span>{title}</span><span className="topbar-right"><span className="online-dot"/> ResearchPilot</span></div>
       <div className="main-content"><ErrorNotice error={error}/>{content}</div>
+      <SiteUsage read={readSource} refreshKey={task?.task_id}/>
     </main>
     {authModal}
   </div></Theme>;

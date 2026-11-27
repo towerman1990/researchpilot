@@ -82,6 +82,15 @@ func TestCompactSynthesisIntegration(t *testing.T) {
 
 func TestInsufficientEvidenceIntegration(t *testing.T) { researchFixture(t, researchFixtureOptions{}) }
 
+func TestUnavailableSearchPlanRepairIntegration(t *testing.T) {
+	t.Setenv("BRAVE_SEARCH_API_KEY", "")
+	researchFixture(t, researchFixtureOptions{sufficient: true, unavailableSearch: true})
+}
+
+func TestFailedURLReplanIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{sufficient: true, failedURL: true})
+}
+
 func TestCoverageJSONRepairIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, malformed: true})
 }
@@ -99,6 +108,8 @@ func TestMultiAgentResearchIntegration(t *testing.T) {
 }
 
 type researchFixtureOptions struct {
+	failedURL                                                                                                        bool
+	unavailableSearch                                                                                                bool
 	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch, demoKnowledge, privateKnowledge bool
 	multiAgent                                                                                                       bool
 }
@@ -185,6 +196,21 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 			raw, _ := io.ReadAll(req.Body)
 			used := 100
 			content := `{"steps":[{"tool":"fetch_page","url":"https://example.com/docs"}]}`
+			if options.failedURL && strings.Contains(string(raw), "Create a technical research plan") {
+				if strings.Contains(string(raw), "upstream_http_404") {
+					if !strings.Contains(string(raw), "https://example.com/missing") {
+						t.Fatal("replanning lost the failed URL")
+					}
+				} else {
+					content = `{"steps":[{"tool":"fetch_page","url":"https://example.com/missing"}]}`
+				}
+			}
+			if options.unavailableSearch && strings.Contains(string(raw), "Create a technical research plan") {
+				content = `{"steps":[{"tool":"web_search","query":"official evidence"}]}`
+			}
+			if options.unavailableSearch && strings.Contains(string(raw), "Repair this plan") && !strings.Contains(string(raw), "tool_unavailable") {
+				t.Fatal("planner repair should identify the unavailable tool")
+			}
 			if options.webSearch {
 				if strings.Contains(string(raw), "Create a technical research plan") && strings.Contains(string(raw), "https://docs.example.org/research-run") {
 					t.Fatal("planning fixture unexpectedly has a source URL")
@@ -202,7 +228,10 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				}
 				content = fmt.Sprintf(`{"notes":[{"source_id":%q,"note":"fixture handoff"}]}`, ids[1])
 			} else if strings.Contains(string(raw), "You are the citation reviewer") {
-				content = `{"supported":[true,false]}`
+				content = `{"supported":[true]}`
+				if options.reviewCitations || options.multiAgent {
+					content = `{"supported":[true,false]}`
+				}
 			} else if strings.Contains(string(raw), "findings") {
 				var request struct{ Messages []struct{ Content string } }
 				if err := json.Unmarshal(raw, &request); err != nil {
@@ -249,6 +278,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 			}
 			body = `{"web":{"results":[{"title":"Unreadable document","url":"https://example.com/unavailable","description":"Unverified search snippet."},{"title":"Official fixture","url":"https://docs.example.org/research-run","description":"Snippet is not report evidence."}]}}`
 		} else {
+			if options.failedURL && req.URL.Path == "/missing" {
+				return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+			}
 			if req.Header.Get("X-Subscription-Token") != "" {
 				t.Fatal("search credential forwarded to a source")
 			}
@@ -311,6 +343,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	}
 	expectedStatus := "SUCCEEDED"
 	expectedUsage := 300
+	if options.failedURL {
+		expectedUsage = 400
+	}
 	if options.demoKnowledge {
 		expectedUsage = 200
 		report, err := worker.store.ReadReport(t.Context(), d.Tenant, d.Task)
@@ -361,9 +396,21 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	if malformed {
 		expectedUsage += 100
 	}
+	if options.unavailableSearch {
+		expectedUsage += 100
+		var failedTools int
+		if err := db.QueryRow("SELECT COUNT(*) FROM execution_attempts WHERE task_id=? AND status='FAILED'", d.Task).Scan(&failedTools); err != nil || failedTools != 0 {
+			t.Fatalf("disabled search should be repaired before execution: %d %v", failedTools, err)
+		}
+	}
 	if !sufficient {
 		expectedStatus = "PARTIAL"
-		expectedUsage = 600
+		expectedUsage = 800
+		report, err := worker.store.ReadReport(t.Context(), d.Tenant, d.Task)
+		if err != nil || !strings.Contains(report, "证据表明该系统支持可靠执行。") ||
+			!strings.Contains(report, "尚未覆盖完整研究目标") {
+			t.Fatalf("incomplete coverage should deliver supported findings with limitations: %q %v", report, err)
+		}
 	}
 	if options.reviewCitations || options.multiAgent {
 		expectedStatus = "PARTIAL"
@@ -501,6 +548,8 @@ func TestReportFollowUpIntegration(t *testing.T) {
 	exec := execution{Runner: runner, delivery: d, epoch: row.epoch}
 	state, err := exec.prepareResearch(ctx, &researchState{task: row})
 	if err != nil || !strings.Contains(state.parentContext, background) ||
+		!strings.Contains(state.parentContext, "Original research goal") ||
+		!strings.Contains(state.parentContext, legacy.Goal) ||
 		!strings.Contains(state.parentContext, "only with evidence archived for this task") {
 		t.Fatalf("follow-up context was not loaded as background: %v", err)
 	}

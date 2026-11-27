@@ -11,6 +11,7 @@ import (
 )
 
 type TaskReader interface {
+	SiteUsage(context.Context, time.Time) (model.SiteUsage, error)
 	ReadSource(context.Context, string, string, string) (model.Source, error)
 	ListTasks(context.Context, string, string) ([]model.TaskSnapshot, error)
 	ReadTask(context.Context, string, string) (model.TaskSnapshot, error)
