@@ -80,6 +80,10 @@ func TestCompactSynthesisIntegration(t *testing.T) {
 	researchFixture(t, researchFixtureOptions{sufficient: true, compactSynthesis: true})
 }
 
+func TestCollectionPreservesReportBudgetIntegration(t *testing.T) {
+	researchFixture(t, researchFixtureOptions{budgetStop: true})
+}
+
 func TestInsufficientEvidenceIntegration(t *testing.T) { researchFixture(t, researchFixtureOptions{}) }
 
 func TestUnavailableSearchPlanRepairIntegration(t *testing.T) {
@@ -111,7 +115,7 @@ type researchFixtureOptions struct {
 	failedURL                                                                                                        bool
 	unavailableSearch                                                                                                bool
 	sufficient, malformed, reviewPlan, reviewCitations, compactSynthesis, webSearch, demoKnowledge, privateKnowledge bool
-	multiAgent                                                                                                       bool
+	multiAgent, budgetStop                                                                                           bool
 }
 
 func researchFixture(t *testing.T, options researchFixtureOptions) {
@@ -258,6 +262,9 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				content = string(encoded)
 			}
 			if strings.Contains(string(raw), "Assess evidence coverage") {
+				if options.budgetStop {
+					used = 4000
+				}
 				if options.compactSynthesis {
 					used = 25000
 				}
@@ -288,7 +295,7 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 				return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("not found")), Request: req}, nil
 			}
 			fetchedURL = req.URL.String()
-			if options.compactSynthesis {
+			if options.compactSynthesis || options.budgetStop {
 				body = "<main>" + strings.Repeat("Official fixture documents durable research execution. ", 240) + "</main>"
 			}
 		}
@@ -296,6 +303,11 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 	})
 	client := &http.Client{Transport: transport}
 	worker := Runner{store: executionStore(t, db), modelHTTP: client, registry: researchtools.NewRegistry(client)}
+	if options.budgetStop {
+		if _, err := db.Exec("UPDATE research_tasks SET tokens_used=15000 WHERE id=?", d.Task); err != nil {
+			t.Fatal(err)
+		}
+	}
 	state, ok, err := worker.claim(context.Background(), d)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
@@ -425,6 +437,16 @@ func researchFixture(t *testing.T, options researchFixtureOptions) {
 		var roles int
 		if err := db.QueryRow("SELECT COUNT(DISTINCT JSON_UNQUOTE(JSON_EXTRACT(payload,'$.role'))) FROM task_events WHERE task_id=? AND event_type='step_started'", d.Task).Scan(&roles); err != nil || roles != 5 {
 			t.Fatalf("expected five roles in task history: %d %v", roles, err)
+		}
+	}
+	if options.budgetStop {
+		expectedUsage = 19300
+		var preserved, started int
+		if err := db.QueryRow("SELECT COUNT(*) FROM task_events WHERE task_id=? AND event_type='report_budget_reserved'", d.Task).Scan(&preserved); err != nil || preserved != 1 {
+			t.Fatalf("budget preservation event count=%d: %v", preserved, err)
+		}
+		if err := db.QueryRow("SELECT COUNT(*) FROM execution_attempts WHERE task_id=? AND status='STARTED'", d.Task).Scan(&started); err != nil || started != 0 {
+			t.Fatalf("unfinished steps after report: %d %v", started, err)
 		}
 	}
 	if status != expectedStatus {

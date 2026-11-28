@@ -12,7 +12,7 @@ import (
 var ErrBudget = errors.New("token budget exhausted")
 
 // Reserve must run inside the transaction holding the task lease lock.
-func Reserve(ctx context.Context, store *repository.ExecutionTx, tenant, task, key string, epoch, tokens uint32) (string, error) {
+func Reserve(ctx context.Context, store *repository.ExecutionTx, tenant, task, key string, epoch, tokens uint32, keep ...uint32) (string, error) {
 	id := identity.New(16)
 	var logical *string
 	var attempt *uint32
@@ -28,7 +28,7 @@ func Reserve(ctx context.Context, store *repository.ExecutionTx, tenant, task, k
 		next := count + 1
 		attempt = &next
 	}
-	count, err := store.Reserve(ctx, tenant, task, tokens)
+	count, err := store.Reserve(ctx, tenant, task, tokens, keep...)
 	if err != nil {
 		return "", err
 	}
@@ -67,12 +67,12 @@ func Settle(ctx context.Context, store *repository.ExecutionTx, tenant, task, id
 
 type modelCallKey struct{}
 
-func (e execution) reserve(ctx context.Context, tokens uint32) (string, error) {
+func (e execution) reserve(ctx context.Context, tokens uint32, keep ...uint32) (string, error) {
 	var id string
 	err := e.mutate(ctx, func(tx *repository.ExecutionTx, _ taskRow) error {
 		key, _ := ctx.Value(modelCallKey{}).(string)
 		var err error
-		id, err = Reserve(ctx, tx, e.Tenant, e.Task, key, e.epoch, tokens)
+		id, err = Reserve(ctx, tx, e.Tenant, e.Task, key, e.epoch, tokens, keep...)
 		return err
 	})
 	return id, err

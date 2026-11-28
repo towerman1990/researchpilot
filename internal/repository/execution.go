@@ -95,7 +95,12 @@ func (s *ExecutionTx) SettleReservations(ctx context.Context, tenant, id string)
 func (s *ExecutionTx) AttemptCount(ctx context.Context, tenant, id, key string) (uint32, error) {
 	return requireOne(s.q.TaskSnapshot.WithContext(ctx).ModelAttemptCount(tenant, id, key))
 }
-func (s *ExecutionTx) Reserve(ctx context.Context, tenant, id string, tokens uint32) (int64, error) {
+func (s *ExecutionTx) Reserve(ctx context.Context, tenant, id string, tokens uint32, keep ...uint32) (int64, error) {
+	if len(keep) > 0 && keep[0] > 0 {
+		// Keep the final report budget available even under concurrent attempts.
+		result := s.q.UnderlyingDB().WithContext(ctx).Exec("UPDATE research_tasks SET tokens_reserved=tokens_reserved+? WHERE tenant_id=? AND id=? AND tokens_used+tokens_reserved+?+LEAST(?,FLOOR(token_limit/2))<=token_limit", tokens, tenant, id, tokens, keep[0])
+		return result.RowsAffected, result.Error
+	}
 	count, err := s.q.TaskSnapshot.WithContext(ctx).ReserveTokens(tenant, id, tokens)
 	return int64(count), err
 }

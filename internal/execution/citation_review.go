@@ -21,7 +21,9 @@ func (e execution) reviewResearch(ctx context.Context, state *researchState) (*r
 		return nil, err
 	}
 	decision, err := e.checkpoint(ctx, "citation-review", func(ctx context.Context) (string, error) {
-		return e.generate(ctx, state.config, citationReviewPrompt(state))
+		return e.generateFittingEvidence(ctx, state.config, func(size int) string {
+			return citationReviewPrompt(state, size)
+		}, budgetForStep("citation-review"), 12000, 8000, 4000, 2000, 1000, 512)
 	})
 	if err != nil {
 		return nil, err
@@ -42,16 +44,29 @@ func (e execution) reviewResearch(ctx context.Context, state *researchState) (*r
 	return state, e.setPhase(ctx, "synthesizing", "citation_review_completed", map[string]int{"removed": removed})
 }
 
-func citationReviewPrompt(state *researchState) string {
+func citationReviewPrompt(state *researchState, evidenceBudget ...int) string {
 	type reviewSource struct {
 		ID      string `json:"source_id"`
 		Excerpt string `json:"excerpt"`
 	}
 	citations := make([]reviewSource, 0, len(state.citations))
-	budget := 12000 / max(1, len(state.citations))
+	limit := 12000
+	if len(evidenceBudget) > 0 {
+		limit = evidenceBudget[0]
+	}
+	budget := limit / max(1, len(state.citations))
 	for _, cited := range state.citations {
+		query := state.task.goal
+		for _, finding := range state.draft.Findings {
+			for _, id := range finding.Sources {
+				if id == cited.ID {
+					query += " " + finding.Text
+					break
+				}
+			}
+		}
 		citations = append(citations, reviewSource{
-			ID: cited.ID, Excerpt: evidencecontract.Select(cited.Excerpt, state.task.goal, budget),
+			ID: cited.ID, Excerpt: evidencecontract.Select(cited.Excerpt, query, budget),
 		})
 	}
 	findings, _ := json.Marshal(state.draft.Findings)

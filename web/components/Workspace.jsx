@@ -20,7 +20,7 @@ const {TextArea} = Input;
 const labels = {QUEUED:'等待派发',RUNNING:'执行中',AWAITING_APPROVAL:'待确认计划',RETRY_WAIT:'等待重试',CANCELLING:'取消中',CANCELLED:'已取消',PARTIAL:'部分完成',SUCCEEDED:'已完成',FAILED:'执行失败'};
 const statusColors = {SUCCEEDED:'success',RUNNING:'processing',AWAITING_APPROVAL:'gold',QUEUED:'processing',PARTIAL:'warning',FAILED:'error',CANCELLED:'default',RETRY_WAIT:'warning'};
 const researchRoleLabels = {planner:'规划员',collector:'资料采集',evidence_analyst:'证据分析员',writer:'撰稿员',reviewer:'引用审核员'};
-const eventLabels = {evidence_brief_skipped:'分析笔记未采用，撰稿员将直接参考原始证据',checkpoint_reused:'复用检查点',task_status:'任务状态更新',step_started:'开始执行步骤',tool_started:'开始采集资料',tool_finished:'资料采集完成',usage_updated:'用量已更新',coverage_updated:'证据覆盖已更新',plan_updated:'研究计划已更新',replan_started:'调整研究计划',citation_review_started:'复核报告引用',citation_review_completed:'引用复核完成',report_ready:'研究报告已生成'};
+const eventLabels = {report_budget_reserved:'已为报告和引用审核保留预算，开始整理现有证据',evidence_brief_skipped:'分析笔记未采用，撰稿员将直接参考原始证据',checkpoint_reused:'复用检查点',task_status:'任务状态更新',step_started:'开始执行步骤',tool_started:'开始采集资料',tool_finished:'资料采集完成',usage_updated:'用量已更新',coverage_updated:'证据覆盖已更新',plan_updated:'研究计划已更新',replan_started:'调整研究计划',citation_review_started:'复核报告引用',citation_review_completed:'引用复核完成',report_ready:'研究报告已生成'};
 
 export function Theme({children}) {
   return <ConfigProvider button={{autoInsertSpace:false}} theme={{token:{colorPrimary:'#2354d8',borderRadius:12,fontFamily:'Inter, "Microsoft YaHei", sans-serif',colorText:'#182540',colorBgLayout:'#f5f7fc'}}}>{children}</ConfigProvider>;

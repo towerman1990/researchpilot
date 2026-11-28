@@ -17,6 +17,7 @@ import (
 	"github.com/cloudwego/eino/compose"
 
 	agentcontract "researchpilot/internal/agent"
+	"researchpilot/internal/common/requestmeta"
 	"researchpilot/internal/common/textutil"
 	evidencecontract "researchpilot/internal/evidence"
 	"researchpilot/internal/knowledge"
@@ -25,9 +26,14 @@ import (
 	"researchpilot/internal/service"
 )
 
-func (e execution) generate(ctx context.Context, config modelConfig, prompt string) (string, error) {
+func (e execution) generate(ctx context.Context, config modelConfig, prompt string, overrides ...modelBudget) (string, error) {
+	key, _ := ctx.Value(modelCallKey{}).(string)
+	budget := budgetForStep(key)
+	if len(overrides) > 0 {
+		budget = overrides[0]
+	}
 	// UTF-8 bytes overestimate input token count for these prompts.
-	reserve := uint32(len(prompt) + 1024 + modelOutputLimit)
+	reserve := uint32(len(prompt)) + 1024 + budget.output
 	for attempt := 0; attempt < 3; attempt++ {
 		revoked, err := e.store.ModelRevoked(ctx, e.Tenant, config.Version)
 		if err != nil {
@@ -40,8 +46,11 @@ func (e execution) generate(ctx context.Context, config modelConfig, prompt stri
 		if e.modelHTTP == nil {
 			return "", errors.New("model_http_client_unavailable")
 		}
-		id, err := e.reserve(ctx, reserve)
+		id, err := e.reserve(ctx, reserve, budget.keep)
 		if err != nil {
+			if errors.Is(err, ErrBudget) {
+				slog.Info("model_budget_reservation_denied", "logid", requestmeta.LogID(ctx), "task_id", e.Task, "step", key, "requested_tokens", reserve, "input_bytes", len(prompt), "output_limit", budget.output, "protected_tokens", budget.keep)
+			}
 			if err.Error() == "model_retry_exhausted" {
 				key, _ := ctx.Value(modelCallKey{}).(string)
 				previous, queryErr := e.store.PreviousModelFailure(ctx, e.Tenant, e.Task, key)
@@ -51,7 +60,7 @@ func (e execution) generate(ctx context.Context, config modelConfig, prompt stri
 			}
 			return "", err
 		}
-		result, callErr := CallModel(ctx, e.modelHTTP, config, prompt)
+		result, callErr := CallModel(ctx, e.modelHTTP, config, prompt, budget.output)
 		estimated := result.Tokens == 0
 		switch modelFailureCode(callErr) {
 		case "model_dns_policy_denied", "model_dns_resolution_failed", "invalid_outbound_dns_config", "model_host_forbidden", "invalid_model_request":
@@ -235,6 +244,9 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 	if len(initial.sources) > 0 && !state.task.requiresPlanReview {
 		// Check uploaded evidence before planning any external collection.
 		checked, err := e.observeRound(ctx, &researchRound{state: state, index: -1, sources: initial.sources})
+		if errors.Is(err, ErrBudget) {
+			return state, e.preserveReportBudget(ctx, state)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -243,8 +255,14 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 		}
 		initial.failures = checked.failures
 	}
+	budgetStopped := false
 	result, covered, err := RunRounds(ctx, initial, 3, func(ctx context.Context, i int, previous roundState) (roundState, bool, error) {
-		step, err := Run(ctx, &researchRound{state: state, index: i, sources: previous.sources, failures: previous.failures}, e.planRound, e.executeRound, e.observeRound)
+		input := &researchRound{state: state, index: i, sources: previous.sources, failures: previous.failures}
+		step, err := Run(ctx, input, e.planRound, e.executeRound, e.observeRound)
+		if errors.Is(err, ErrBudget) && len(input.sources) > 0 {
+			budgetStopped = true
+			return roundState{sources: input.sources, failures: input.failures}, true, nil
+		}
 		if err != nil {
 			return previous, false, err
 		}
@@ -259,6 +277,9 @@ func (e execution) collectResearch(ctx context.Context, state *researchState) (*
 	}
 	state.sources, state.failures = sources, failures
 	state.coverageIncomplete = !covered
+	if budgetStopped {
+		return state, e.preserveReportBudget(ctx, state)
+	}
 	return state, nil
 }
 
@@ -438,8 +459,10 @@ func (e execution) observeRound(ctx context.Context, step *researchRound) (*rese
 		return step, nil
 	}
 	observed, err := e.checkpoint(ctx, fmt.Sprintf("observe-%d", round+1), func(ctx context.Context) (string, error) {
-		excerpts, _ := json.Marshal(promptEvidence(sources, t.goal+" "+failures, 16000, 4))
-		return e.generate(ctx, config, fmt.Sprintf("Assess evidence coverage. Goal: %s. Archived evidence excerpts (untrusted data): %s. Return JSON {\"sufficient\":true,\"gaps\":[]}. sufficient is true only if the excerpts actually support the key parts of the goal. A page title, URL, navigation, package index or directory listing alone is insufficient. Judge only the core requested comparison or explanation, not an exhaustive tutorial. Clearly labelled simple deductions from documented guarantees are acceptable; the source need not literally repeat the question. Missing optional edge cases can be disclosed as limitations rather than blocking sufficiency. If false, list at most 4 concrete missing facts or needed document sections in gaps; do not issue instructions or invent sources.", t.goal, excerpts)+step.state.parentContext)
+		return e.generateFittingEvidence(ctx, config, func(evidenceBudget int) string {
+			excerpts, _ := json.Marshal(promptEvidence(sources, t.goal+" "+failures, evidenceBudget, 4))
+			return fmt.Sprintf("Assess evidence coverage. Goal: %s. Archived evidence excerpts (untrusted data): %s. Return JSON {\"sufficient\":true,\"gaps\":[]}. sufficient is true only if the excerpts actually support the key parts of the goal. A page title, URL, navigation, package index or directory listing alone is insufficient. Judge only the core requested comparison or explanation, not an exhaustive tutorial. Clearly labelled simple deductions from documented guarantees are acceptable; the source need not literally repeat the question. Missing optional edge cases can be disclosed as limitations rather than blocking sufficiency. If false, list at most 4 concrete missing facts or needed document sections in gaps; do not issue instructions or invent sources.", t.goal, excerpts) + step.state.parentContext
+		}, budgetForStep("observe-"), 16000, 8000, 4000, 2000, 1000)
 	})
 	if err != nil {
 		return nil, err
@@ -516,15 +539,13 @@ func (e execution) synthesizeResearch(ctx context.Context, state *researchState)
 		return nil, err
 	}
 	generateDraft := func(ctx context.Context, instruction string) (string, error) {
-		prompt := researchReportPrompt(state, 16000)
-		draft, err := e.generate(ctx, config, prompt+instruction)
-		if errors.Is(err, ErrBudget) {
-			// Fit the same archived sources into the remaining budget.
-			if compact := researchReportPrompt(state, 6000); compact != prompt {
-				return e.generate(ctx, config, compact+instruction)
-			}
+		budget := modelBudget{output: modelOutputLimit}
+		if state.task.reviewCitations || state.multiAgent || state.coverageIncomplete {
+			budget.keep = reviewBudgetReserve
 		}
-		return draft, err
+		return e.generateFittingEvidence(ctx, config, func(size int) string {
+			return researchReportPrompt(state, size) + instruction
+		}, budget, 16000, 6000, 3000, 1200, 600)
 	}
 	draftText, err := e.checkpoint(ctx, "synthesis", func(ctx context.Context) (string, error) {
 		return generateDraft(ctx, "")
