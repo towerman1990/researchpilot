@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -22,6 +23,9 @@ func (s *Store) Write(ctx context.Context, tenant string, lockUser bool, action 
 		if lockUser {
 			user := tx.User
 			if _, err := user.WithContext(ctx).Select(user.ID).Where(user.ID.Eq(tenant)).Clauses(clause.Locking{Strength: "UPDATE"}).First(); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return sql.ErrNoRows
+				}
 				return err
 			}
 		}

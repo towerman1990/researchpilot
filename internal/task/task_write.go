@@ -334,7 +334,7 @@ func (s TaskActions) DeleteConversation(ctx context.Context, tenant, id string) 
 	if _, err := hex.DecodeString(id); len(id) != 32 || err != nil {
 		return ErrConversationNotFound
 	}
-	return s.Store.Write(ctx, tenant, true, func(tx repository.WriteTx) error {
+	err := s.Store.Write(ctx, tenant, true, func(tx repository.WriteTx) error {
 		ids, err := tx.DeleteConversation(tenant, id)
 		if err != nil {
 			return err
@@ -346,4 +346,9 @@ func (s TaskActions) DeleteConversation(ctx context.Context, tenant, id string) 
 		}
 		return nil
 	})
+	// A newly issued guest identity has no user row until its first research.
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrConversationNotFound
+	}
+	return err
 }

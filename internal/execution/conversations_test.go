@@ -147,6 +147,9 @@ func TestDeleteConversationIntegration(t *testing.T) {
 	actions := taskservice.TaskActions{Store: store}
 	owner, foreign := newTestTask(t, db), newTestTask(t, db)
 	ctx := t.Context()
+	if err := actions.DeleteConversation(ctx, identity.New(16), identity.New(16)); !errors.Is(err, taskservice.ErrConversationNotFound) {
+		t.Fatalf("guest without a user row: %v", err)
+	}
 	for _, status := range []string{"QUEUED", "RUNNING", "AWAITING_APPROVAL", "RETRY_WAIT", "SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED"} {
 		t.Run(status, func(t *testing.T) {
 			root, err := actions.Submit(ctx, owner.Tenant, "delete-"+status, "待删除研究", "", taskservice.SubmitOptions{})

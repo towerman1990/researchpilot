@@ -63,6 +63,12 @@ try{
   await command('Page.enable');
   await command('Page.navigate',{url:base});
   await until("document.querySelector('textarea') && !document.querySelector('input[type=email]')","workbench without login");
+  const missingGuestConversation=await evaluate(`(async()=>{
+    await fetch('/api/v1/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const response=await fetch('/api/v1/research/conversations/00000000000000000000000000000000',{method:'DELETE',headers:{'Content-Type':'application/json'},body:'{}'});
+    return response.status;
+  })()`);
+  if(missingGuestConversation!==404)throw Error('Fresh guest deletion should return 404, got '+missingGuestConversation);
   const guestDraft = '访客额度用完后的研究草稿';
   if (process.env.TEST_GUEST_TRIAL === '1') {
     for (let i=1; i<=5; i++) {
