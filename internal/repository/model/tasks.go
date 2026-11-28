@@ -3,20 +3,22 @@ package model
 import "encoding/json"
 
 type TaskSnapshot struct {
-	ID             string         `json:"task_id"`
-	Goal           string         `json:"goal"`
-	ParentTaskID   *string        `json:"parent_task_id,omitempty"`
-	CreationLogID  *string        `json:"creation_logid,omitempty" gorm:"column:creation_logid"`
-	ReviewPlan     *string        `json:"review_plan,omitempty"`
-	Status         string         `json:"status"`
-	Phase          *string        `json:"phase"`
-	Seq            uint64         `json:"event_seq,string" gorm:"column:event_seq"`
-	Error          *string        `json:"error_code,omitempty" gorm:"column:error_code"`
-	TokensUsed     uint32         `json:"tokens_used"`
-	TokensReserved uint32         `json:"tokens_reserved"`
-	TokenLimit     uint32         `json:"token_limit"`
-	MinSeq         uint64         `json:"min_event_seq,string" gorm:"column:min_event_seq"`
-	Calls          []CallSnapshot `json:"calls,omitempty" gorm:"-"`
+	ID               string         `json:"task_id"`
+	Goal             string         `json:"goal"`
+	ParentTaskID     *string        `json:"parent_task_id,omitempty"`
+	ConversationID   *string        `json:"conversation_id,omitempty"`
+	ConversationTurn uint64         `json:"conversation_turn,omitempty"`
+	CreationLogID    *string        `json:"creation_logid,omitempty" gorm:"column:creation_logid"`
+	ReviewPlan       *string        `json:"review_plan,omitempty"`
+	Status           string         `json:"status"`
+	Phase            *string        `json:"phase"`
+	Seq              uint64         `json:"event_seq,string" gorm:"column:event_seq"`
+	Error            *string        `json:"error_code,omitempty" gorm:"column:error_code"`
+	TokensUsed       uint32         `json:"tokens_used"`
+	TokensReserved   uint32         `json:"tokens_reserved"`
+	TokenLimit       uint32         `json:"token_limit"`
+	MinSeq           uint64         `json:"min_event_seq,string" gorm:"column:min_event_seq"`
+	Calls            []CallSnapshot `json:"calls,omitempty" gorm:"-"`
 }
 
 type CallSnapshot struct {

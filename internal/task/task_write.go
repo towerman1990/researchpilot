@@ -21,6 +21,9 @@ import (
 )
 
 var (
+	ErrConversationNotFound     = repository.ErrConversationNotFound
+	ErrConversationBusy         = repository.ErrConversationBusy
+	ErrConversationChanged      = repository.ErrConversationChanged
 	ErrKnowledgeLibraryNotFound = errors.New("knowledge_library_not_found")
 	ErrInvalidTask              = errors.New("invalid_task_request")
 	ErrIdempotencyConflict      = errors.New("idempotency_conflict")
@@ -42,6 +45,7 @@ type TaskWriter interface {
 type TaskActions struct{ Store TaskWriter }
 
 type SubmitOptions struct {
+	ConversationID     string
 	ReviewPlan         bool
 	ReviewCitations    bool
 	MultiAgent         bool
@@ -56,6 +60,12 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		return model.TaskSnapshot{}, ErrInvalidTask
 	}
 	kd, rd := sha256.Sum256([]byte(key)), sha256.Sum256([]byte(goal))
+	conversationID := strings.ToLower(options.ConversationID)
+	if conversationID != "" {
+		if _, err := hex.DecodeString(conversationID); len(conversationID) != 32 || err != nil {
+			return model.TaskSnapshot{}, ErrInvalidTask
+		}
+	}
 	if parentID != "" {
 		if _, err := hex.DecodeString(parentID); len(parentID) != 32 || err != nil {
 			return model.TaskSnapshot{}, ErrInvalidTask
@@ -63,6 +73,9 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		parentID = strings.ToLower(parentID)
 		// A leading invalid UTF-8 byte separates follow-up digests from existing goal-only digests.
 		rd = sha256.Sum256([]byte("\xff" + parentID + goal))
+	}
+	if conversationID != "" {
+		rd = sha256.Sum256(append(append([]byte{0xf8}, rd[:]...), conversationID...))
 	}
 	if options.ReviewPlan {
 		rd = sha256.Sum256(append([]byte{0xfe}, rd[:]...))
@@ -114,6 +127,16 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		if conversationID != "" {
+			previous, err := tx.ContinueConversation(tenant, conversationID)
+			if err != nil {
+				return err
+			}
+			if parentID != "" && parentID != previous {
+				return ErrConversationChanged
+			}
+			parentID = previous
+		}
 		if guest {
 			allowed, err := tx.ConsumeGuestTrial(tenant, options.GuestAddress, service.GuestTrialLimit)
 			if err != nil {
@@ -136,7 +159,7 @@ func (s TaskActions) Submit(ctx context.Context, tenant, key, goal, parentID str
 			}
 		}
 		id = identity.New(16)
-		if err := tx.AddTask(tenant, id, goal, parentID, requestmeta.LogID(ctx), options.ReviewPlan, options.ReviewCitations, true); err != nil {
+		if err := tx.AddTask(tenant, id, goal, parentID, requestmeta.LogID(ctx), options.ReviewPlan, options.ReviewCitations, true, conversationID); err != nil {
 			return err
 		}
 		if options.DemoKnowledge {
@@ -264,41 +287,63 @@ func (s TaskActions) ApprovePlan(ctx context.Context, tenant, id string, seq uin
 
 func (s TaskActions) Cancel(ctx context.Context, tenant, id string) (model.TaskSnapshot, error) {
 	err := s.Store.Write(ctx, tenant, false, func(tx repository.WriteTx) error {
-		task, err := tx.LockTask(tenant, id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrTaskNotFound
-		}
-		if err != nil {
-			return err
-		}
-		if task.Status == "CANCELLED" || task.Status == "CANCELLING" {
-			return nil
-		}
-		if Terminal(task.Status) {
-			return ErrTaskFinished
-		}
-		if err := tx.FlagCancellation(tenant, id); err != nil {
-			return err
-		}
-		seq := task.Seq + 1
-		payload := map[string]string{"status": "CANCELLING"}
-		if task.Status == "RUNNING" {
-			err = tx.MarkCancelling(tenant, id, seq)
-		} else {
-			payload = map[string]string{"status": "CANCELLED", "error_code": ""}
-			err = tx.MarkCancelled(tenant, id, seq)
-		}
-		if err != nil {
-			return err
-		}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		return tx.AppendEvent(tenant, id, seq, string(body))
+		return cancelTask(tx, tenant, id)
 	})
 	if err != nil {
 		return model.TaskSnapshot{}, err
 	}
 	return s.Store.ReadTask(ctx, tenant, id)
+}
+
+func cancelTask(tx repository.WriteTx, tenant, id string) error {
+	task, err := tx.LockTask(tenant, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTaskNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if task.Status == "CANCELLED" || task.Status == "CANCELLING" {
+		return nil
+	}
+	if Terminal(task.Status) {
+		return ErrTaskFinished
+	}
+	if err := tx.FlagCancellation(tenant, id); err != nil {
+		return err
+	}
+	seq := task.Seq + 1
+	payload := map[string]string{"status": "CANCELLING"}
+	if task.Status == "RUNNING" {
+		err = tx.MarkCancelling(tenant, id, seq)
+	} else {
+		payload = map[string]string{"status": "CANCELLED", "error_code": ""}
+		err = tx.MarkCancelled(tenant, id, seq)
+	}
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return tx.AppendEvent(tenant, id, seq, string(body))
+}
+
+func (s TaskActions) DeleteConversation(ctx context.Context, tenant, id string) error {
+	if _, err := hex.DecodeString(id); len(id) != 32 || err != nil {
+		return ErrConversationNotFound
+	}
+	return s.Store.Write(ctx, tenant, true, func(tx repository.WriteTx) error {
+		ids, err := tx.DeleteConversation(tenant, id)
+		if err != nil {
+			return err
+		}
+		for _, taskID := range ids {
+			if err := cancelTask(tx, tenant, taskID); err != nil && !errors.Is(err, ErrTaskFinished) {
+				return err
+			}
+		}
+		return nil
+	})
 }

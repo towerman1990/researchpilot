@@ -190,3 +190,7 @@
   font-size: 12px;
 }
 .site-usage{padding:0 18px 24px;color:#7a879c;font-size:12px;line-height:1.8;text-align:center}
+.conversation-page{min-width:0}.conversation-turn{margin:24px 0 32px;min-width:0}.conversation-turn>h2{font-size:20px;line-height:1.6;overflow-wrap:anywhere;margin:0 0 16px}.conversation-composer{margin-top:28px}.conversation-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}
+@media print{.conversation-composer,.site-usage,.workspace:has(.printing-report) .conversation-turn:not(:has(.printing-report)){display:none!important}}
+
+.conversation-history-row{display:flex;align-items:center;gap:2px}.conversation-history-row .history{flex:1;min-width:0}.delete-conversation{flex-shrink:0;opacity:.5}.conversation-history-row:hover .delete-conversation,.delete-conversation:focus-visible{opacity:1}

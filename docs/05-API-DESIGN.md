@@ -3,8 +3,10 @@
 | 方法和路径（前缀 /api/v1） | 契约 |
 |---|---|
 | POST /auth/register、/auth/login、/auth/refresh、/auth/logout | 注册登录、刷新轮换、撤销，Web 用安全 Cookie，桌面采用平台会话适配。 |
-| GET / POST /conversations | 游标列表或创建会话。P0 用于任务归组。 |
-| POST /research/tasks | 请求提供 `goal` 以及可选的 `parent_task_id`、`review_plan`、`review_citations`、`multi_agent`、`demo_knowledge`、`knowledge_library_id` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同请求内容时返回 409。 |
+| GET /research/conversations | 当前身份的会话游标列表；首轮研究提交时自动创建会话。 |
+| DELETE /research/conversations/{id} | 软删除当前身份的会话，并取消未完成研究，成功返回 204。 |
+| GET /research/conversations/{id} | 读取会话与分页轮次，旧任务接口继续用于进度、报告和证据。 |
+| POST /research/tasks | 请求提供 `goal` 以及可选的 `conversation_id`、`parent_task_id`、`review_plan`、`review_citations`、`multi_agent`、`demo_knowledge`、`knowledge_library_id` 和 `attachments`，并携带 `Idempotency-Key`。返回 202、任务快照和 `Location` 响应头。相同幂等键携带不同请求内容时返回 409。 |
 | GET /research/tasks | 返回当前租户的任务数组，每页最多 50 条，按创建时间和任务 ID 降序排列。有更早的记录时，响应头 `X-Next-Cursor` 提供下一页的 `before` 值。 |
 | GET /research/tasks/{id} | 获取任务快照，包括状态、阶段和最新事件序号。 |
 | GET /research/tasks/{id}/events | SSE，按 Last-Event-ID 回放，也接受 after 用于初始连接。 |
@@ -84,3 +86,17 @@ Web 使用同源会话 Cookie（Secure、HttpOnly、合适 SameSite），写操�
 ## 公开使用统计
 
 `GET /site/usage` 无需登录，返回 `day`、`today_users`、`today_uses`、`total_users` 和 `total_uses`。日期按北京时间计算。成功创建的交互研究和追问计次，登录按账号、访客按 IP 摘要去重。同一请求的幂等重放、后台重试、取消操作及定时任务的自动触发不增加统计。人数为该统计周期内账号数与访客 IP 数之和，同一人登录前后可能分别计入。数据从迁移 021 启用后的新任务开始累计，历史访客 IP 无法补算。
+
+
+## 会话
+
+迁移 022 创建会话并为旧任务与追问链分组。任务快照增加 conversation_id 和 conversation_turn，原有任务查询、事件流和报告接口继续可用。
+
+- GET /research/conversations 返回当前身份的会话列表，按更新时间和 ID 倒序排列，每页最多 50 个。X-Next-Cursor 为不透明游标，后续传入 before。
+- GET /research/conversations/:id 返回 conversation、tasks、next_before。tasks 按轮次升序展示最新 20 轮，next_before 非空时用 before 加载更早的轮次。跨身份访问返回 404。
+- POST /research/tasks 可传 conversation_id，在该会话追加一轮。服务端在事务内锁定会话、选择上一轮并分配轮次。当前轮仍在运行或等待计划确认时返回 409 conversation_busy。已结束但没有报告的失败/取消轮次允许继续，仍使用本会话的历史背景。
+- 请求同时提供 parent_task_id 时，必须与会话当前可追问的最新任务一致，否则返回 409 conversation_changed。conversation_id 纳入幂等摘要，相同请求重放返回原任务。
+- 省略 conversation_id 时，独立任务创建新会话，原有 parent_task_id 追问加入父任务的会话。定时研究每次执行创建单独会话。
+- 各轮任务继续独立计费、取消和恢复。上下文包含首轮及最近四轮的目标与截取报告，引用仍须来自当前轮的归档资料。
+
+- DELETE /research/conversations/:id 接收空 JSON 对象，沿用写接口的身份与来源校验。锁定用户、会话后，在同一事务内软删除并取消所有未结束轮次；执行中的轮次进入 CANCELLING，其余未结束轮次直接 CANCELLED。重复删除返回 204，其他身份或不存在的会话返回 404。会话列表、详情及任务历史隐藏已删除会话，禁止追加轮次；历史任务、报告的同身份直连接口保留，统计和已形成的长期记忆不回退。目前未提供恢复或彻底清除接口。

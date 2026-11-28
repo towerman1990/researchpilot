@@ -73,6 +73,41 @@ func TestMigrationsIntegration(t *testing.T) {
 		}
 	}
 	// Tests use a dedicated empty database. Re-running must preserve data and ledger.
+	priorDir := t.TempDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".sql" || entry.Name() == "022_research_conversations.sql" {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(priorDir, entry.Name()), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, db, priorDir); err != nil {
+		t.Fatal(err)
+	}
+	var conversationMigration int
+	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version='022_research_conversations.sql'").Scan(&conversationMigration); err != nil {
+		t.Fatal(err)
+	}
+	if conversationMigration == 0 {
+		for _, row := range []struct{ id, parent string }{
+			{"00000000000000000000000000000003", task},
+			{"00000000000000000000000000000004", "00000000000000000000000000000003"},
+			{"00000000000000000000000000000005", task},
+		} {
+			if _, err := db.Exec("INSERT INTO research_tasks(id,tenant_id,goal,parent_task_id,status,event_seq,deadline_at) VALUES(?,?,?,?,'SUCCEEDED',1,UTC_TIMESTAMP(6))", row.id, tenant, "legacy follow-up", row.parent); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	if err := Migrate(ctx, db, dir); err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +119,18 @@ func TestMigrationsIntegration(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE dirty=false").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 21 {
+	if count != 22 {
 		t.Fatalf("ledger count=%d", count)
+	}
+	var conversation string
+	if err := db.QueryRow("SELECT conversation_id FROM research_tasks WHERE tenant_id=? AND id=?", tenant, task).Scan(&conversation); err != nil || conversation != task {
+		t.Fatalf("legacy root mapping: %s %v", conversation, err)
+	}
+	if conversationMigration == 0 {
+		var turns int
+		if err := db.QueryRow("SELECT COUNT(*) FROM research_tasks WHERE tenant_id=? AND conversation_id=?", tenant, task).Scan(&turns); err != nil || turns != 4 {
+			t.Fatalf("legacy follow-ups were not grouped: %d %v", turns, err)
+		}
 	}
 	if err := Migrate(ctx, db, dir); err != nil {
 		t.Fatal(err)

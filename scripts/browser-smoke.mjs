@@ -70,7 +70,7 @@ try{
       await until("[...document.querySelectorAll('button')].some(b=>b.textContent==='开始研究'&&!b.disabled)","enabled guest submit");
       await clickText('开始研究');
       await until(`document.querySelectorAll('button.history').length===${i}`,"guest task created");
-      await clickText('新建研究');
+      await clickText('新建会话');
     }
     await until("document.querySelector('.model-hint')?.textContent.includes('0 / 5')","guest quota exhausted");
     const newVisitorQuota = await evaluate(`fetch('/api/v1/auth/guest',{method:'POST',credentials:'omit',
@@ -101,6 +101,26 @@ try{
   await until("!!document.querySelector('button.history')","history after reload");
   await evaluate("document.querySelector('button.history').click()");
   await until("document.querySelector('.report-content')?.textContent.includes('M1 演示报告')","report restored from snapshot");
+  await until("document.querySelector('#conversation-question') && document.querySelector('.status')?.textContent==='已完成'", "conversation composer");
+  await setInput('#conversation-question','继续比较部署方案的内存需求');
+  await until("[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='发送'&&!b.disabled)", 'enabled follow-up submission');
+  await clickText('发送');
+  await until("document.querySelectorAll('.conversation-turn').length===2 && document.querySelector('.status')?.textContent==='已完成'", "second turn completes");
+  await until("document.querySelectorAll('.report-content').length===2", "two reports in one conversation");
+  if (await evaluate("document.querySelectorAll('button.history').length") !== 1) throw Error('Follow-up created another sidebar conversation');
+  await command('Page.reload');
+  await until("document.querySelectorAll('button.history').length===1", "one conversation after reload");
+  await evaluate("document.querySelector('button.history').click()");
+  await until("document.querySelectorAll('.report-content').length===2 && document.body.textContent.includes('继续比较部署方案的内存需求')", "conversation restored");
+  await evaluate("document.querySelector('.delete-conversation').click()");
+  await until("document.body.textContent.includes('删除这个会话？')", "delete confirmation");
+  await clickText('保留');
+  if (await evaluate("document.querySelectorAll('button.history').length") !== 1) throw Error('Cancelled deletion removed conversation');
+  await evaluate("document.querySelector('.delete-conversation').click()");
+  await clickText('删除');
+  await until("!document.querySelector('button.history') && !document.querySelector('.conversation-turn') && !location.hash", "deleted conversation resets workspace");
+  await command('Page.reload');
+  await until("!!document.querySelector('textarea') && !document.querySelector('button.history')", "deleted conversation stays hidden after reload");
   await clickText('模型设置');
   await until("!!document.querySelector('input[name=api_key]')","model form");
   await setInput('input[name=base_url]','https://api.deepseek.com');
@@ -120,7 +140,7 @@ try{
   await until("![...document.querySelectorAll('button')].some(b=>b.textContent.includes('撤销全部'))","config revoked");
   const shot=await command('Page.captureScreenshot',{format:'png'});
   await writeFile(path.resolve('.cache/browser-smoke.png'),Buffer.from(shot.data,'base64'));
-  console.log('Browser smoke passed: auth, research, report, reload, encrypted config, key retention and revocation.');
+  console.log('Browser smoke passed: auth, two-turn conversation, report, reload, encrypted config, key retention and revocation.');
 }catch(error){
   if(socket?.readyState===WebSocket.OPEN){
     try{const shot=await command('Page.captureScreenshot',{format:'png'});await writeFile(path.resolve('.cache/browser-smoke.png'),Buffer.from(shot.data,'base64'));}catch{}

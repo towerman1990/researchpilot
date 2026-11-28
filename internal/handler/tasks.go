@@ -27,6 +27,10 @@ func (h Tasks) RegisterRoutes(r route.IRouter) {
 	r.GET("/api/v1/site/usage", h.Auth.apiHeaders, h.siteUsage)
 	g := r.Group("/api/v1/research/tasks", h.Auth.apiHeaders, h.Auth.requireTaskSession)
 	g.GET("", h.list)
+	conversations := r.Group("/api/v1/research/conversations", h.Auth.apiHeaders, h.Auth.requireTaskSession)
+	conversations.GET("", h.conversations)
+	conversations.GET("/:id", h.conversation)
+	r.DELETE("/api/v1/research/conversations/:id", h.Auth.requireJSON, h.Auth.requireTaskSession, h.deleteConversation)
 	r.GET("/api/v1/research/preferences", h.Auth.apiHeaders, h.Auth.requireSession, h.getPreferences)
 	r.GET("/api/v1/research/usage", h.Auth.apiHeaders, h.Auth.requireSession, h.getUsage)
 	r.GET("/api/v1/research/usage/models", h.Auth.apiHeaders, h.Auth.requireSession, h.getModelUsage)
@@ -191,6 +195,7 @@ func (h Tasks) submit(ctx context.Context, c *app.RequestContext) {
 	var input struct {
 		Goal               string                 `json:"goal"`
 		ParentTaskID       string                 `json:"parent_task_id"`
+		ConversationID     string                 `json:"conversation_id"`
 		ReviewPlan         bool                   `json:"review_plan"`
 		ReviewCitations    bool                   `json:"review_citations"`
 		MultiAgent         bool                   `json:"multi_agent"`
@@ -202,6 +207,7 @@ func (h Tasks) submit(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	options := taskservice.SubmitOptions{ReviewPlan: input.ReviewPlan, ReviewCitations: input.ReviewCitations, MultiAgent: input.MultiAgent, DemoKnowledge: input.DemoKnowledge, KnowledgeLibraryID: input.KnowledgeLibraryID}
+	options.ConversationID = input.ConversationID
 	if c.GetBool(guestKey) {
 		options.GuestAddress = clientAddress(ctx, c)
 	}

@@ -6,6 +6,9 @@ import './style.css';
 import {applyTaskEvent, mergeEvent, mergeTaskSnapshot, terminal} from './events.js';
 
 const path = '/api/v1/research/tasks';
+function initialTask() {
+  return /^#task=([a-f0-9]{32})$/.exec(window.location.hash)?.[1] || '';
+}
 function newRequestID() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -14,6 +17,10 @@ function newRequestID() {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 const errors = {
+  conversation_not_found:'找不到这个会话。',
+  conversation_busy:'当前会话的研究尚未结束，请稍后继续。',
+  conversation_changed:'会话已有新的研究，请先查看最新一轮。',
+  invalid_conversation_cursor:'会话分页位置无效，请刷新后重试。',
   invalid_credentials:'请检查邮箱和密码。注册密码至少需要 10 字节。',
   registration_conflict:'这个邮箱已注册，请直接登录。',
   invalid_research_materials:'每项任务最多两份 UTF-8 文本资料，每份最多 24 KiB。请检查文件名和内容。',
@@ -104,12 +111,17 @@ function App() {
   const [authBusy,setAuthBusy] = useState(false);
   const [register,setRegister] = useState(false);
   const [history,setHistory] = useState([]);
+  const deletedConversations = useRef(new Set());
+  const [conversations,setConversations] = useState([]);
+  const [conversationCursor,setConversationCursor] = useState('');
+  const [conversationBusy,setConversationBusy] = useState(false);
+  const conversationLoading = useRef(false);
   const [historyCursor,setHistoryCursor] = useState('');
   const [historyBusy,setHistoryBusy] = useState(false);
   const historyLoading = useRef(false);
   const sessionScope = useRef({});
-  const selection = useRef({id:''});
-  const [selected,setSelected] = useState('');
+  const selection = useRef({id:initialTask()});
+  const [selected,setSelected] = useState(initialTask);
   const [task,setTask] = useState(null);
   const [events,setEvents] = useState([]);
   const [report,setReport] = useState('');
@@ -157,9 +169,11 @@ function App() {
   function endSession({keepDraft = false} = {}) {
     sessionScope.current = {};
     historyLoading.current = false;
+    deletedConversations.current.clear();
     requestKey.current = null;
     select('');
     setHistory([]);
+    setConversations([]); setConversationCursor(''); setConversationBusy(false); conversationLoading.current=false;
     setHistoryCursor('');
     setHistoryBusy(false);
     if (!keepDraft) setGoal('');
@@ -205,6 +219,47 @@ function App() {
     return ()=>{active=false;};
   },[user,settings,selected]);
 
+  useEffect(() => {
+    if (!user && !guestReady) return;
+    let active = true;
+    const scope = sessionScope.current;
+    requestJSON('/api/v1/research/conversations').then(({data,headers}) => {
+      if (!active || sessionScope.current !== scope) return;
+      setConversations(old => [...data,...old.filter(item => !data.some(row => row.conversation_id===item.conversation_id))].filter(item=>!deletedConversations.current.has(item.conversation_id)));
+      setConversationCursor(headers.get('X-Next-Cursor') || '');
+    }, e => { if (active) handleSessionError(scope,e); });
+    return () => { active = false; };
+  }, [user,guestReady,selected,task?.status]);
+
+  async function loadMoreConversations() {
+    if (!conversationCursor || conversationLoading.current) return;
+    const scope=sessionScope.current;
+    conversationLoading.current=true; setConversationBusy(true);
+    try {
+      const {data,headers}=await requestJSON('/api/v1/research/conversations?before='+encodeURIComponent(conversationCursor));
+      if (sessionScope.current!==scope) return;
+      setConversations(old=>[...old,...data.filter(item=>!deletedConversations.current.has(item.conversation_id) && !old.some(row=>row.conversation_id===item.conversation_id))]);
+      setConversationCursor(headers.get('X-Next-Cursor') || '');
+    } catch(e) {handleSessionError(scope,e);}
+    finally {if(sessionScope.current===scope){conversationLoading.current=false;setConversationBusy(false);}}
+  }
+
+  async function deleteConversation(id) {
+    const scope=sessionScope.current;
+    try {
+      await requestJSON('/api/v1/research/conversations/'+id, {method:'DELETE',headers:{'Content-Type':'application/json'},body:'{}'});
+      if (sessionScope.current!==scope) return;
+      deletedConversations.current.add(id);
+      setConversations(old=>old.filter(item=>item.conversation_id!==id));
+      setHistory(old=>old.filter(item=>item.conversation_id!==id));
+      if (task?.conversation_id===id || conversations.some(item=>item.conversation_id===id && item.last_task_id===selection.current.id)) select('');
+    } catch(e) {handleSessionError(scope,e);}
+  }
+
+  function openConversation(value) {
+    setSettings(false);
+    select(value.last_task_id);
+  }
   async function loadPreferences() {
     const scope = sessionScope.current;
     setPreferencesError(false);
@@ -382,6 +437,7 @@ function App() {
     selection.current = {id};
     setReport(''); setTask(null); setEvents([]); setError(''); setConnection('');
     setSelected(id);
+    window.history.replaceState(null,'',window.location.pathname+window.location.search+(id?'#task='+id:''));
   }
 
   async function authenticate(event) {
@@ -404,12 +460,12 @@ function App() {
     await submitTask(goal, '', reviewPlan, attachments, reviewCitations, demoKnowledge, libraryID, multiAgent);
   }
 
-  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false, demoKnowledge = false, libraryID = '', multiAgent = false) {
+  async function submitTask(question, parentTaskID = '', reviewPlan = false, attachments = [], reviewCitations = false, demoKnowledge = false, libraryID = '', multiAgent = false, conversationID = '') {
     setBusy(true); setError('');
     const value = question.trim();
     const attachmentKey = JSON.stringify(attachments);
-    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey || requestKey.current?.demoKnowledge !== demoKnowledge || requestKey.current?.libraryID !== libraryID || requestKey.current?.multiAgent !== multiAgent) {
-      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,demoKnowledge,libraryID,multiAgent,attachmentKey,id:newRequestID()};
+    if (requestKey.current?.goal !== value || requestKey.current?.parentTaskID !== parentTaskID || requestKey.current?.reviewPlan !== reviewPlan || requestKey.current?.reviewCitations !== reviewCitations || requestKey.current?.attachmentKey !== attachmentKey || requestKey.current?.demoKnowledge !== demoKnowledge || requestKey.current?.libraryID !== libraryID || requestKey.current?.multiAgent !== multiAgent || requestKey.current?.conversationID !== conversationID) {
+      requestKey.current = {goal:value,parentTaskID,reviewPlan,reviewCitations,demoKnowledge,libraryID,multiAgent,conversationID,attachmentKey,id:newRequestID()};
     }
     const request = requestKey.current;
     const scope = sessionScope.current;
@@ -419,6 +475,7 @@ function App() {
       if (sessionScope.current !== scope) return;
       const payload = {goal:value};
       if (parentTaskID) payload.parent_task_id = parentTaskID;
+      if (conversationID) payload.conversation_id = conversationID;
       if (reviewPlan) payload.review_plan = true;
       if (reviewCitations) payload.review_citations = true;
       if (multiAgent) payload.multi_agent = true;
@@ -435,10 +492,12 @@ function App() {
       if (!parentTaskID) setGoal('');
       if (requestKey.current === request) requestKey.current = null;
       if (!user) void refreshGuest(scope).catch(() => {});
+      return created;
     } catch (e) {
       if (sessionScope.current !== scope) return;
       if (e.code === 'guest_trial_exhausted') {
         setModelInfo(info => ({...info, trial_remaining:0}));
+        if (conversationID) setGoal(value);
         openAuth(e.message);
       } else {
         handleSessionError(scope, e);
@@ -467,13 +526,13 @@ function App() {
     }
   }
 
-  function downloadReport() {
-    if (!report || !selected) return;
-    const blob = new Blob([report], {type:'text/markdown;charset=utf-8'});
+  function downloadReport(markdown = report, taskID = selected) {
+    if (!markdown || !taskID) return;
+    const blob = new Blob([markdown], {type:'text/markdown;charset=utf-8'});
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `researchpilot-${selected}.md`;
+    link.download = `researchpilot-${taskID}.md`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -523,7 +582,7 @@ function App() {
   const authModal = <AuthView open={authPrompt !== null} message={authPrompt}
     onClose={() => setAuthPrompt(null)} error={authError} setError={setAuthError} busy={authBusy}
     {...{register,setRegister,authenticate}}/>;
-  return <Workspace user={user} openAuth={openAuth} authModal={authModal} sessionLoading={user === null} readSource={api} readOverview={fetchOverview} {...{history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,submitTask,approvePlan,busy,saveModel,activateModel,probeModel,revokeModel,preferences,preferencesError,loadPreferences,savePreferences,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
+  return <Workspace user={user} openAuth={openAuth} authModal={authModal} sessionLoading={user === null} readSource={api} readOverview={fetchOverview} {...{conversations,conversationCursor,conversationBusy,loadMoreConversations,openConversation,deleteConversation,history,historyCursor,historyBusy,loadMoreHistory,selected,select,settings,setSettings,setModelInfo,logout,error,modelInfo,goal,setGoal,submit,submitTask,approvePlan,busy,saveModel,activateModel,probeModel,revokeModel,preferences,preferencesError,loadPreferences,savePreferences,task,events,report,connection,errors,cancelTask,downloadReport}}/>;
 }
 
 createRoot(document.getElementById('root')).render(<App/>);

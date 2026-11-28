@@ -15,8 +15,15 @@ func (t WriteTx) EnableMultiAgent(tenant, id string) error {
 	return t.db.Exec("UPDATE research_tasks SET preferences_snapshot=JSON_SET(COALESCE(preferences_snapshot, JSON_OBJECT()), '$.multi_agent', CAST('true' AS JSON)) WHERE tenant_id=? AND id=?", tenant, id).Error
 }
 
-func (t WriteTx) AddTask(tenant, id, goal, parentID, creationLogID string, reviewPlan, reviewCitations, snapshotPreferences bool) error {
-	return t.tasks.AddTask(tenant, id, goal, parentID, creationLogID, reviewPlan, reviewCitations, snapshotPreferences)
+func (t WriteTx) AddTask(tenant, id, goal, parentID, creationLogID string, reviewPlan, reviewCitations, snapshotPreferences bool, conversationIDs ...string) error {
+	if err := t.tasks.AddTask(tenant, id, goal, parentID, creationLogID, reviewPlan, reviewCitations, snapshotPreferences); err != nil {
+		return err
+	}
+	conversation := ""
+	if len(conversationIDs) > 0 {
+		conversation = conversationIDs[0]
+	}
+	return t.attachConversation(tenant, id, goal, parentID, conversation)
 }
 func (t WriteTx) CanFollowUp(tenant, id string) (bool, error) {
 	return requireOne(t.tasks.CanFollowUp(tenant, id))

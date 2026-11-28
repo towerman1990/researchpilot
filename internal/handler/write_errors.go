@@ -14,6 +14,7 @@ var writeErrors = []struct {
 	err    error
 	status int
 }{
+	{taskservice.ErrConversationNotFound, 404}, {taskservice.ErrConversationBusy, 409}, {taskservice.ErrConversationChanged, 409},
 	{taskservice.ErrKnowledgeLibraryNotFound, 404}, {taskservice.ErrInvalidTask, 422}, {taskservice.ErrIdempotencyConflict, 409}, {service.ErrTrialExhausted, 409},
 	{service.ErrGuestTrialExhausted, 429}, {service.ErrTrialUnavailable, 503}, {taskservice.ErrModelRevoked, 409}, {taskservice.ErrTaskNotFound, 404}, {taskservice.ErrTaskFinished, 409}, {taskservice.ErrReportNotReady, 409},
 	{taskservice.ErrInvalidPlan, 422}, {taskservice.ErrInvalidPreferences, 422}, {taskservice.ErrInvalidMaterials, 422}, {taskservice.ErrPlanNotAwaiting, 409},

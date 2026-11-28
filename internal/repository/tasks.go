@@ -31,17 +31,35 @@ func (s *Store) ReadTask(ctx context.Context, tenant, id string) (snapshot model
 			return sql.ErrNoRows
 		}
 		snapshot = rows[0]
+		var conversation struct {
+			ConversationID   *string
+			ConversationTurn uint64
+		}
+		if err := tx.UnderlyingDB().Raw("SELECT conversation_id,COALESCE(conversation_turn,0) AS conversation_turn FROM research_tasks WHERE tenant_id=? AND id=?", tenant, id).Scan(&conversation).Error; err != nil {
+			return err
+		}
+		snapshot.ConversationID, snapshot.ConversationTurn = conversation.ConversationID, conversation.ConversationTurn
 		snapshot.Calls, err = tasks.LatestCalls(tenant, id)
 		return err
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	return snapshot, err
 }
 func (s *Store) ListTasks(ctx context.Context, tenant, before string) ([]model.TaskSnapshot, error) {
-	q := s.q.TaskSnapshot.WithContext(ctx)
+
+	query := "SELECT t.* FROM research_tasks t LEFT JOIN research_conversations c ON c.tenant_id=t.tenant_id AND c.id=t.conversation_id"
+	args := []any{}
 	if before != "" {
-		return q.ListSnapshotsBefore(tenant, before)
+		query += " JOIN research_tasks anchor ON anchor.tenant_id=t.tenant_id AND anchor.id=?"
+		args = append(args, before)
 	}
-	return q.ListSnapshots(tenant)
+	query += " WHERE t.tenant_id=? AND c.deleted_at IS NULL"
+	args = append(args, tenant)
+	if before != "" {
+		query += " AND (t.created_at<anchor.created_at OR (t.created_at=anchor.created_at AND t.id<anchor.id))"
+	}
+	var rows []model.TaskSnapshot
+	err := s.db.WithContext(ctx).Raw(query+" ORDER BY t.created_at DESC,t.id DESC LIMIT 51", args...).Scan(&rows).Error
+	return rows, err
 }
 
 func (s *Store) OverviewTasks(ctx context.Context, tenant string) (open, finished []model.OverviewTask, err error) {
